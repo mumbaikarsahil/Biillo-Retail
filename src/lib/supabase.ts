@@ -10,14 +10,18 @@ export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
 
 export type Item = {
   id: string;
+  created_at: string; // <--- ADD THIS (Needed for sorting: .order("created_at"))
   item_code: string;
   make: string;
   brand_name: string;
   purchase_price: number;
   selling_price: number;
+  price_per_piece: number;
   supplier_code: string;
   quantity: number;
   item_name: string;
+  pieces_per_box: number;
+  size: string;
 };
 
 export type Bill = {

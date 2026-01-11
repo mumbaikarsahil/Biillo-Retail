@@ -136,13 +136,21 @@ export default function Analytics() {
     }
   };
 
-  const filteredItems = items.filter(
-    (item) =>
-      item.item_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.brand_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.supplier_code.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.item_code.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredItems = items
+    .filter(
+      (item) =>
+        item.item_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        item.brand_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        item.supplier_code.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        item.item_code.toLowerCase().includes(searchQuery.toLowerCase())
+    )
+    .map(item => ({
+      ...item,
+      // Add formatted stock display
+      stockDisplay: item.pieces_per_box > 1 
+        ? `${Math.floor(item.quantity / item.pieces_per_box)} unit${Math.floor(item.quantity / item.pieces_per_box) !== 1 ? 's' : ''} + ${item.quantity % item.pieces_per_box} pc${item.quantity % item.pieces_per_box !== 1 ? 's' : ''}`
+        : `${item.quantity} pc${item.quantity !== 1 ? 's' : ''}`
+    }));
 
   const exportToExcel = () => {
     const exportData = filteredItems.map((item) => ({
@@ -153,7 +161,9 @@ export default function Analytics() {
       "Purchase Price": item.purchase_price,
       "Selling Price": item.selling_price,
       "Supplier Code": item.supplier_code,
-      "Stock Remaining": item.quantity,
+      "Pieces per Unit": item.pieces_per_box,
+      "Total Pieces": item.quantity,
+      "Stock Display": item.stockDisplay,
     }));
 
     const ws = XLSX.utils.json_to_sheet(exportData);
@@ -285,20 +295,22 @@ export default function Analytics() {
                     <TableHead>Name</TableHead>
                     <TableHead className="hidden md:table-cell">Brand</TableHead>
                     <TableHead className="hidden lg:table-cell">Supplier</TableHead>
+                    <TableHead className="text-center">Size</TableHead>
                     <TableHead className="text-right">Price</TableHead>
                     <TableHead className="text-right">Stock</TableHead>
+                    <TableHead className="text-right">Pieces/Unit</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {isLoading ? (
                     <TableRow>
-                      <TableCell colSpan={6} className="text-center py-8">
+                      <TableCell colSpan={7} className="text-center py-8">
                         Loading...
                       </TableCell>
                     </TableRow>
                   ) : filteredItems.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                      <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
                         No items found
                       </TableCell>
                     </TableRow>
@@ -309,10 +321,25 @@ export default function Analytics() {
                         <TableCell className="font-medium">{item.item_name}</TableCell>
                         <TableCell className="hidden md:table-cell">{item.brand_name}</TableCell>
                         <TableCell className="hidden lg:table-cell">{item.supplier_code}</TableCell>
+                        <TableCell className="text-center">
+                          {item.size && item.size !== 'Free Size' && (
+                            <Badge variant="outline" className="text-xs">
+                              {item.size}
+                            </Badge>
+                          )}
+                        </TableCell>
                         <TableCell className="text-right">₹{item.selling_price}</TableCell>
                         <TableCell className="text-right">
-                          <Badge variant={item.quantity < 5 ? "destructive" : "secondary"}>
-                            {item.quantity}
+                          <Badge 
+                            variant={item.quantity === 0 ? "destructive" : item.quantity <= 5 ? "destructive" : "outline"}
+                            className="whitespace-nowrap"
+                          >
+                            {item.stockDisplay}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Badge variant="secondary" className="whitespace-nowrap">
+                            {item.pieces_per_box} pcs
                           </Badge>
                         </TableCell>
                       </TableRow>
