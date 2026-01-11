@@ -9,6 +9,7 @@ const navItems = [
   { href: "/inventory/add", label: "Add Stock", icon: Plus },
   { href: "/billing", label: "Billing", icon: ShoppingCart },
   { href: "/analytics", label: "Analytics", icon: Package },
+  { href: "/manage", label: "Manage", icon: Package },
 ];
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
