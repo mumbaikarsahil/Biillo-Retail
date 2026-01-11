@@ -7,6 +7,7 @@ import Index from "./pages/Index";
 import AddInventory from "./pages/inventory/AddInventory";
 import Billing from "./pages/billing/Billing";
 import Analytics from "./pages/analytics/Analytics";
+import Manage from "./pages/analytics/Manage";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -22,6 +23,7 @@ const App = () => (
           <Route path="/inventory/add" element={<AddInventory />} />
           <Route path="/billing" element={<Billing />} />
           <Route path="/analytics" element={<Analytics />} />
+          <Route path="/manage" element={<Manage />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>
