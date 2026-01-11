@@ -7,7 +7,7 @@ import Index from "./pages/Index";
 import AddInventory from "./pages/inventory/AddInventory";
 import Billing from "./pages/billing/Billing";
 import Analytics from "./pages/analytics/Analytics";
-import Manage from "./pages/analytics/Manage";
+import Manage from "./pages/manage/Manage";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
