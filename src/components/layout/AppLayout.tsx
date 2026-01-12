@@ -22,7 +22,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
       <aside className="hidden lg:fixed lg:inset-y-0 lg:z-50 lg:flex lg:w-64 lg:flex-col">
         <div className="flex grow flex-col gap-y-5 overflow-y-auto border-r border-border bg-card px-6 pb-4">
           <div className="flex h-16 shrink-0 items-center gap-2">
-            <Package className="h-8 w-8 text-primary" />
+            <img src="/logo.png" alt="Logo" className="h-8 w-8 object-contain" />
             <span className="text-xl font-bold text-foreground">Sakhi Collection</span>
           </div>
           <nav className="flex flex-1 flex-col">
@@ -61,7 +61,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
           <Menu className="h-6 w-6" />
         </Button>
         <div className="flex items-center gap-2">
-          <Package className="h-6 w-6 text-primary" />
+          <img src="/logo.png" alt="Logo" className="h-6 w-6 object-contain" />
           <span className="text-lg font-bold">Sakhi Collection</span>
         </div>
       </div>
@@ -76,7 +76,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
           <div className="fixed inset-y-0 left-0 w-64 bg-card p-6">
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-2">
-                <Package className="h-6 w-6 text-primary" />
+                <img src="/logo.png" alt="Logo" className="h-6 w-6 object-contain" />
                 <span className="text-lg font-bold">Sakhi Collection</span>
               </div>
               <Button

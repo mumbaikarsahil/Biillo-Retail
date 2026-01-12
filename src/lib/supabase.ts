@@ -3,25 +3,28 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://czdokbkmecadjxbippjm.supabase.co';
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN6ZG9rYmttZWNhZGp4YmlwcGptIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjcxNzY4ODUsImV4cCI6MjA4Mjc1Mjg4NX0.Eb_f56lYLXolVbU0utVdZrvsnQ77FtKktTQtpSgMwB4';
 
-// Create client even if credentials are empty - pages will handle the missing connection gracefully
+// Create client even if credentials are empty
 export const supabase: SupabaseClient = createClient(supabaseUrl, supabaseAnonKey);
 
 export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
 
 export type Item = {
   id: string;
-  created_at: string; // <--- ADD THIS (Needed for sorting: .order("created_at"))
+  created_at: string;
   item_code: string;
-  make: string;
-  brand_name: string;
-  purchase_price: number;
-  selling_price: number;
-  price_per_piece: number;
-  supplier_code: string;
-  quantity: number;
   item_name: string;
-  pieces_per_box: number;
-  size: string;
+  
+  // These can be null in the database, so we allow null here to prevent crashes
+  make: string | null;       
+  brand_name: string | null; 
+  supplier_code: string | null; 
+  
+  purchase_price: number;
+  selling_price: number;     
+  price_per_piece: number;   
+  quantity: number;          
+  pieces_per_box: number;    
+  size: string;              
 };
 
 export type Bill = {

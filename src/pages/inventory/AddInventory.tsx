@@ -165,6 +165,7 @@ export default function AddInventory() {
           item_name: data.item_name,
           make: data.make,
           brand_name: data.brand_name,
+          size: data.size,
           purchase_price: data.purchase_price,
           selling_price: data.selling_price,
           price_per_piece: price_per_piece,

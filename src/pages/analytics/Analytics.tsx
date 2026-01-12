@@ -31,6 +31,7 @@ import {
   Download,
   Search,
   IndianRupee,
+  Wallet, // Added Wallet icon for Investment visualization
 } from "lucide-react";
 
 type DailySales = {
@@ -41,7 +42,11 @@ type DailySales = {
 export default function Analytics() {
   const [items, setItems] = useState<Item[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
-  const [totalInventoryValue, setTotalInventoryValue] = useState(0);
+  
+  // State for Inventory Values
+  const [totalPurchaseValue, setTotalPurchaseValue] = useState(0); // Cost to owner
+  const [totalSellingValue, setTotalSellingValue] = useState(0);   // Potential revenue
+  
   const [todaySales, setTodaySales] = useState(0);
   const [monthSales, setMonthSales] = useState(0);
   const [lowStockCount, setLowStockCount] = useState(0);
@@ -65,12 +70,21 @@ export default function Analytics() {
       if (itemsError) throw itemsError;
       setItems(itemsData || []);
 
-      // Calculate inventory value
-      const inventoryValue = (itemsData || []).reduce(
-        (sum, item) => sum + item.selling_price * item.quantity,
+      // --- NEW CALCULATIONS HERE ---
+      // 1. Calculate Total Investment (Purchase Price * Quantity)
+      const purchaseVal = (itemsData || []).reduce(
+        (sum, item) => sum + (item.purchase_price || 0) * item.quantity,
         0
       );
-      setTotalInventoryValue(inventoryValue);
+      setTotalPurchaseValue(purchaseVal);
+
+      // 2. Calculate Total Potential Revenue (Selling Price * Quantity)
+      const sellingVal = (itemsData || []).reduce(
+        (sum, item) => sum + (item.selling_price || 0) * item.quantity,
+        0
+      );
+      setTotalSellingValue(sellingVal);
+      // -----------------------------
 
       // Count low stock items (less than 5)
       const lowStock = (itemsData || []).filter((item) => item.quantity < 5).length;
@@ -108,7 +122,10 @@ export default function Analytics() {
       const last7Days: DailySales[] = [];
       for (let i = 6; i >= 0; i--) {
         const date = new Date();
+        const displayDate = new Date(date); // Copy for display
         date.setDate(date.getDate() - i);
+        displayDate.setDate(displayDate.getDate() - i);
+        
         const dateStr = date.toISOString().split("T")[0];
 
         const { data: dayBills } = await supabase
@@ -120,7 +137,7 @@ export default function Analytics() {
 
         const dayTotal = (dayBills || []).reduce((sum, bill) => sum + bill.final_amount, 0);
         last7Days.push({
-          date: date.toLocaleDateString("en-US", { weekday: "short" }),
+          date: displayDate.toLocaleDateString("en-US", { weekday: "short" }),
           amount: dayTotal,
         });
       }
@@ -141,12 +158,11 @@ export default function Analytics() {
       (item) =>
         item.item_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         item.brand_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.supplier_code.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (item.supplier_code && item.supplier_code.toLowerCase().includes(searchQuery.toLowerCase())) ||
         item.item_code.toLowerCase().includes(searchQuery.toLowerCase())
     )
     .map(item => ({
       ...item,
-      // Add formatted stock display
       stockDisplay: item.pieces_per_box > 1 
         ? `${Math.floor(item.quantity / item.pieces_per_box)} unit${Math.floor(item.quantity / item.pieces_per_box) !== 1 ? 's' : ''} + ${item.quantity % item.pieces_per_box} pc${item.quantity % item.pieces_per_box !== 1 ? 's' : ''}`
         : `${item.quantity} pc${item.quantity !== 1 ? 's' : ''}`
@@ -187,14 +203,23 @@ export default function Analytics() {
 
         {/* Stats Cards */}
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-          <Card>
+          
+          {/* UPDATED CARD: Inventory Valuation */}
+          <Card className="border-l-4 border-l-primary">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Total Inventory Value</CardTitle>
-              <IndianRupee className="h-4 w-4 text-muted-foreground" />
+              <CardTitle className="text-sm font-medium">Inventory Valuation</CardTitle>
+              <Wallet className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">₹{totalInventoryValue.toLocaleString()}</div>
-              <p className="text-xs text-muted-foreground">{items.length} unique items</p>
+              <div className="space-y-1">
+                <span className="text-xs text-muted-foreground uppercase font-bold tracking-wider">Total Investment</span>
+                <div className="text-2xl font-bold">₹{totalPurchaseValue.toLocaleString()}</div>
+              </div>
+              
+              <div className="mt-3 pt-2 border-t flex justify-between items-center text-sm">
+                <span className="text-muted-foreground">Potential Sales Value:</span>
+                <span className="font-semibold text-green-600">₹{totalSellingValue.toLocaleString()}</span>
+              </div>
             </CardContent>
           </Card>
 
@@ -296,21 +321,21 @@ export default function Analytics() {
                     <TableHead className="hidden md:table-cell">Brand</TableHead>
                     <TableHead className="hidden lg:table-cell">Supplier</TableHead>
                     <TableHead className="text-center">Size</TableHead>
-                    <TableHead className="text-right">Price</TableHead>
+                    <TableHead className="text-right">Buy Price</TableHead>
+                    <TableHead className="text-right">Sell Price</TableHead>
                     <TableHead className="text-right">Stock</TableHead>
-                    <TableHead className="text-right">Pieces/Unit</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {isLoading ? (
                     <TableRow>
-                      <TableCell colSpan={7} className="text-center py-8">
+                      <TableCell colSpan={8} className="text-center py-8">
                         Loading...
                       </TableCell>
                     </TableRow>
                   ) : filteredItems.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                      <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
                         No items found
                       </TableCell>
                     </TableRow>
@@ -328,18 +353,14 @@ export default function Analytics() {
                             </Badge>
                           )}
                         </TableCell>
-                        <TableCell className="text-right">₹{item.selling_price}</TableCell>
+                        <TableCell className="text-right text-muted-foreground">₹{item.purchase_price}</TableCell>
+                        <TableCell className="text-right font-medium">₹{item.selling_price}</TableCell>
                         <TableCell className="text-right">
                           <Badge 
                             variant={item.quantity === 0 ? "destructive" : item.quantity <= 5 ? "destructive" : "outline"}
                             className="whitespace-nowrap"
                           >
                             {item.stockDisplay}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <Badge variant="secondary" className="whitespace-nowrap">
-                            {item.pieces_per_box} pcs
                           </Badge>
                         </TableCell>
                       </TableRow>
