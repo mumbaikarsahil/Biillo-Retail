@@ -34,6 +34,12 @@ export type Bill = {
   discount_amount: number;
   final_amount: number;
   customer_phone: string | null;
+  
+  // --- New Fields for Udhaar & Payment Tracking ---
+  customer_name: string | null;
+  payment_status: 'paid' | 'pending'; // 'pending' = Udhaar
+  payment_method: 'cash' | 'online' | 'udhaar';
+  is_udhaar: boolean;
 };
 
 export type BillItem = {

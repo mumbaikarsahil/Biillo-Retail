@@ -2,12 +2,12 @@ import React, { useState, useEffect } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { jsPDF } from "jspdf";
+import Barcode from "react-barcode"; // Changed from QRCode
 import { AppLayout } from "@/components/layout/AppLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch"; // Import Switch
+import { Switch } from "@/components/ui/switch";
 import {
   Table,
   TableBody,
@@ -42,12 +42,10 @@ import {
   Search, 
   Pencil, 
   Trash2, 
-  QrCode, 
+  Printer, // Changed Icon
   Loader2, 
   Package, 
   AlertTriangle,
-  Tag,
-  Layers
 } from "lucide-react";
 
 // Expanded Schema to include Size and Pack Details
@@ -80,6 +78,7 @@ export default function ManageInventory() {
   // Modal States
   const [editingItem, setEditingItem] = useState<Item | null>(null);
   const [deletingItem, setDeletingItem] = useState<Item | null>(null);
+  const [printingItem, setPrintingItem] = useState<Item | null>(null); // New Print State
 
   // Edit Form Hook
   const {
@@ -238,61 +237,21 @@ export default function ManageInventory() {
     }
   };
 
-  const generatePDFLabel = (item: Item) => {
-    const doc = new jsPDF();
-    const labelsPerRow = 3;
-    const labelsPerCol = 5;
-    const labelWidth = 60;
-    const labelHeight = 60;
-    const startX = 15;
-    const startY = 15;
-    const isPackItem = (item.pieces_per_box || 1) > 1;
-
-    const totalBoxes = Math.ceil(item.quantity / (item.pieces_per_box || 1));
-    const totalLabels = isPackItem ? totalBoxes : item.quantity;
-    const printCount = Math.min(totalLabels, 60); 
-
-    if (printCount === 0) {
-        toast({ title: "No Stock", description: "Quantity is 0, nothing to print." });
+  const handlePrintLabel = (item: Item) => {
+    if (item.quantity <= 0) {
+        toast({ title: "No Stock", description: "Cannot print labels for 0 quantity.", variant: "destructive" });
         return;
     }
-
-    for (let i = 0; i < printCount; i++) {
-      const pageIndex = Math.floor(i / (labelsPerRow * labelsPerCol));
-      const posInPage = i % (labelsPerRow * labelsPerCol);
-      const col = posInPage % labelsPerRow;
-      const row = Math.floor(posInPage / labelsPerRow);
-
-      if (i > 0 && posInPage === 0) doc.addPage();
-
-      const x = startX + col * labelWidth;
-      const y = startY + row * labelHeight;
-
-      doc.rect(x, y, labelWidth - 5, labelHeight - 5);
-      
-      doc.setFontSize(8);
-      doc.text(item.item_code, x + (labelWidth - 5) / 2, y + 10, { align: "center" });
-      
-      doc.setFontSize(10);
-      doc.text(`Rs. ${item.selling_price}`, x + (labelWidth - 5) / 2, y + 20, { align: "center" });
-      
-      if (isPackItem) {
-        doc.setFontSize(8);
-        doc.text(`Pack of ${item.pieces_per_box}`, x + (labelWidth - 5) / 2, y + 30, { align: "center" });
-      }
-      
-      const itemName = item.item_name.length > 15 ? item.item_name.substring(0, 15) + '...' : item.item_name;
-      doc.setFontSize(7);
-      doc.text(itemName, x + (labelWidth - 5) / 2, y + 40, { align: "center" });
-    }
-
-    doc.save(`QR_Labels_${item.item_code}.pdf`);
-    toast({ title: "Labels Generated", description: `Generated ${printCount} labels.` });
+    setPrintingItem(item);
+    // Wait for state to update, then print
+    setTimeout(() => {
+        window.print();
+    }, 100);
   };
 
   return (
     <AppLayout>
-      <div className="max-w-7xl mx-auto space-y-6 animate-fade-in p-4">
+      <div className="max-w-7xl mx-auto space-y-6 animate-fade-in p-4 print:hidden">
         {/* Header Section */}
         <div className="flex flex-col md:flex-row justify-between md:items-center gap-4">
           <div>
@@ -348,41 +307,41 @@ export default function ManageInventory() {
                         <span className="font-medium truncate">{item.brand_name}</span>
                       </div>
                       <div className="flex flex-col">
-                         <span className="text-[10px] text-muted-foreground uppercase">Size</span>
-                         <span className="font-medium">{item.size}</span>
+                          <span className="text-[10px] text-muted-foreground uppercase">Size</span>
+                          <span className="font-medium">{item.size}</span>
                       </div>
                       <div className="flex flex-col">
-                         <span className="text-[10px] text-muted-foreground uppercase">Stock</span>
-                         <span className={`font-bold ${item.quantity < 5 ? 'text-red-600' : 'text-foreground'}`}>
+                          <span className="text-[10px] text-muted-foreground uppercase">Stock</span>
+                          <span className={`font-bold ${item.quantity < 5 ? 'text-red-600' : 'text-foreground'}`}>
                             {item.quantity} units
-                         </span>
+                          </span>
                       </div>
                       <div className="flex flex-col">
-                         <span className="text-[10px] text-muted-foreground uppercase">Pack</span>
-                         <span>{item.pieces_per_box > 1 ? `Pack of ${item.pieces_per_box}` : 'Single'}</span>
+                          <span className="text-[10px] text-muted-foreground uppercase">Pack</span>
+                          <span>{item.pieces_per_box > 1 ? `Pack of ${item.pieces_per_box}` : 'Single'}</span>
                       </div>
                     </div>
 
                     {/* Row 3: Actions */}
                     <div className="flex justify-between items-center pt-2 border-t mt-2">
-                       <div className="flex items-center">
+                        <div className="flex items-center">
                           {item.quantity < 5 && (
                             <span className="text-xs text-red-500 flex items-center gap-1 bg-red-50 px-2 py-1 rounded-full">
                                 <AlertTriangle className="h-3 w-3" /> Low Stock
                             </span>
                           )}
-                       </div>
-                       <div className="flex gap-2">
-                        <Button variant="outline" size="sm" onClick={() => generatePDFLabel(item)}>
-                           <QrCode className="h-4 w-4" />
-                        </Button>
-                        <Button variant="outline" size="sm" onClick={() => setEditingItem(item)}>
-                           <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button variant="outline" size="sm" className="text-destructive border-destructive/20" onClick={() => setDeletingItem(item)}>
-                           <Trash2 className="h-4 w-4" />
-                        </Button>
-                       </div>
+                        </div>
+                        <div className="flex gap-2">
+                         <Button variant="outline" size="sm" onClick={() => handlePrintLabel(item)}>
+                            <Printer className="h-4 w-4" />
+                         </Button>
+                         <Button variant="outline" size="sm" onClick={() => setEditingItem(item)}>
+                            <Pencil className="h-4 w-4" />
+                         </Button>
+                         <Button variant="outline" size="sm" className="text-destructive border-destructive/20" onClick={() => setDeletingItem(item)}>
+                            <Trash2 className="h-4 w-4" />
+                         </Button>
+                        </div>
                     </div>
                   </CardContent>
                 </Card>
@@ -445,8 +404,8 @@ export default function ManageInventory() {
                             </TableCell>
                             <TableCell className="text-right">
                               <div className="flex justify-end gap-2">
-                                <Button variant="ghost" size="icon" onClick={() => generatePDFLabel(item)}>
-                                  <QrCode className="h-4 w-4" />
+                                <Button variant="ghost" size="icon" onClick={() => handlePrintLabel(item)}>
+                                  <Printer className="h-4 w-4" />
                                 </Button>
                                 <Button variant="ghost" size="icon" onClick={() => setEditingItem(item)}>
                                   <Pencil className="h-4 w-4" />
@@ -597,6 +556,38 @@ export default function ManageInventory() {
         </AlertDialog>
 
       </div>
+
+      {/* --- HIDDEN PRINT AREA --- */}
+      {printingItem && (
+        <div id="printable-labels" className="hidden print:block">
+          <style type="text/css" media="print">
+            {`
+              body * { visibility: hidden; }
+              #printable-labels, #printable-labels * { visibility: visible; }
+              #printable-labels { position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 0; background-color: white; }
+              @page { size: auto; margin: 5mm; }
+            `}
+          </style>
+          
+          <div className="grid grid-cols-3 gap-2">
+            {Array.from({ length: printingItem.pieces_per_box > 1 ? Math.ceil(printingItem.quantity / printingItem.pieces_per_box) : printingItem.quantity }).map((_, i) => (
+              <div key={i} className="border border-gray-400 bg-white p-1 flex flex-col items-center text-center h-[160px] justify-between break-inside-avoid">
+                <div className="w-full">
+                  <div className="font-bold text-sm text-black">प्रगती'ज सखी कलेक्शन</div>
+                  <div className="text-[10px] text-gray-800">साई भवन, शहापूर</div>
+                </div>
+                <div className="font-extrabold text-xl text-black">₹{printingItem.selling_price}</div>
+                <div className="w-full flex justify-center overflow-hidden">
+                  <Barcode value={printingItem.item_code} height={35} width={1.4} fontSize={11} displayValue={true} margin={2} />
+                </div>
+                <div className="text-[7px] leading-tight text-black w-full px-1 mt-1">
+                   सूचना:- सिल्क, जरी & फॅन्सी साड्या ड्रायकलिन कराव्यात. गॅरंटी नाही.
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </AppLayout>
   );
 }

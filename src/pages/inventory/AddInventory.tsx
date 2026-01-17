@@ -1,9 +1,8 @@
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import QRCode from "react-qr-code";
-import { jsPDF } from "jspdf";
+import Barcode from "react-barcode";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,36 +11,50 @@ import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { supabase, Item } from "@/lib/supabase";
-import { Download, Plus, QrCode } from "lucide-react";
+import { Printer, Plus, RotateCcw } from "lucide-react";
 
+// --- UPDATED SCHEMA & VALIDATION ---
 const formSchema = z.object({
   item_name: z.string().min(1, "Item name is required"),
   make: z.string().min(1, "Make is required"),
   brand_name: z.string().min(1, "Brand name is required"),
   size: z.string().default('M'),
-  purchase_price: z.coerce.number().positive("Must be positive"),
-  selling_price: z.coerce.number().positive("Must be positive"),
+  purchase_price: z.coerce.number().min(0, "Must be positive"), // Changed to min(0) to allow initial 0 state
+  selling_price: z.coerce.number().min(0, "Must be positive"),  // Changed to min(0)
   is_pack: z.boolean().default(false),
-  price_per_piece: z.coerce.number().positive("Must be positive").optional(),
+  
+  // FIX: Allow 0 here so hidden fields don't block submission. We check >0 in refine below.
+  price_per_piece: z.coerce.number().min(0).optional(), 
+  
   supplier_code: z.string().min(1, "Supplier code is required"),
   pieces_per_box: z.coerce.number().int().min(1, "Must be at least 1").default(1).optional(),
   number_of_boxes: z.coerce.number().int().min(0, "Cannot be negative").default(0).optional(),
   quantity: z.coerce.number().int().min(0, "Cannot be negative").default(0),
 }).refine(data => {
+  // Validate Prices are actually positive when submitting
+  if (data.purchase_price <= 0 || data.selling_price <= 0) {
+      return false;
+  }
+  return true;
+}, {
+  message: "Prices must be greater than 0",
+  path: ["selling_price"], // Point error to selling price
+}).refine(data => {
   if (data.is_pack) {
-    return data.number_of_boxes! > 0 || data.quantity > 0;
+    return (data.number_of_boxes || 0) > 0 || data.quantity > 0;
   }
   return data.quantity > 0;
 }, {
   message: "Quantity must be greater than 0",
   path: ["quantity"],
 }).refine(data => {
-  if (data.is_pack && data.pieces_per_box! > 1) {
-    return !!data.price_per_piece;
+  // FIX: Explicitly check for > 0 here only if pack mode is enabled
+  if (data.is_pack && (data.pieces_per_box || 0) > 1) {
+    return (data.price_per_piece || 0) > 0;
   }
   return true;
 }, {
-  message: "Price per piece is required for items with multiple pieces per box",
+  message: "Price per piece is required and must be > 0",
   path: ["price_per_piece"],
 });
 
@@ -62,7 +75,6 @@ export default function AddInventory() {
   const [formData, setFormData] = useState<Partial<FormData>>({});
   const { toast } = useToast();
   
-  // Common sizes for selection
   const sizes = ['XS', 'S', 'M', 'L', 'XL', 'XXL', '3XL', '4XL', '5XL', 'Free Size'];
 
   const {
@@ -70,9 +82,7 @@ export default function AddInventory() {
     handleSubmit,
     reset,
     control,
-    watch,
     setValue,
-    getValues,
     formState: { errors },
   } = useForm<FormData>({
     resolver: zodResolver(formSchema),
@@ -82,19 +92,28 @@ export default function AddInventory() {
       number_of_boxes: 0,
       quantity: 1,
       size: 'M',
-      ...formData, // Load any saved form data
+      purchase_price: 0,
+      selling_price: 0,
+      price_per_piece: 0,
+      ...formData, 
     },
   });
   
-  // Save form data when it changes (except for quantity and pack fields)
-  const handleFormChange = () => {
-    const { quantity, pieces_per_box, number_of_boxes, is_pack, ...persistentData } = getValues();
-    setFormData(persistentData);
-  };
+  const isPack = useWatch({ control, name: 'is_pack' });
+  const piecesPerBox = useWatch({ control, name: 'pieces_per_box' }) || 1;
+  const numberOfBoxes = useWatch({ control, name: 'number_of_boxes' }) || 0;
   
-  // Clear the form completely
+  React.useEffect(() => {
+    if (isPack) {
+      const totalQuantity = numberOfBoxes * piecesPerBox;
+      setValue('quantity', totalQuantity, { shouldValidate: true });
+    }
+  }, [isPack, numberOfBoxes, piecesPerBox, setValue]);
+
   const handleClearForm = () => {
     setFormData({});
+    setSavedItem(null);
+    // This reset logic is now safe because Schema allows 0 values
     reset({
       item_name: '',
       make: '',
@@ -107,22 +126,9 @@ export default function AddInventory() {
       pieces_per_box: 1,
       number_of_boxes: 0,
       quantity: 1,
-      price_per_piece: 0,
+      price_per_piece: 0, 
     });
   };
-
-  // Get current values without causing re-renders
-  const isPack = useWatch({ control, name: 'is_pack' });
-  const piecesPerBox = useWatch({ control, name: 'pieces_per_box' }) || 1;
-  const numberOfBoxes = useWatch({ control, name: 'number_of_boxes' }) || 0;
-  
-  // Calculate total quantity when pack-related fields change
-  React.useEffect(() => {
-    if (isPack) {
-      const totalQuantity = numberOfBoxes * piecesPerBox;
-      setValue('quantity', totalQuantity, { shouldValidate: true });
-    }
-  }, [isPack, numberOfBoxes, piecesPerBox, setValue]);
 
   const onSubmit = async (data: FormData) => {
     setIsLoading(true);
@@ -132,28 +138,13 @@ export default function AddInventory() {
       const piecesPerBox = isPack ? (data.pieces_per_box || 1) : 1;
       const numBoxes = isPack ? (data.number_of_boxes || 0) : 0;
       
-      // Save form data (except quantity and pack fields)
       const { quantity, pieces_per_box, number_of_boxes, is_pack, ...persistentData } = data;
       setFormData(persistentData);
       
-      // Store persistent fields in state
-      const persistentFields = {
-        item_name: data.item_name,
-        make: data.make,
-        brand_name: data.brand_name,
-        size: data.size,
-        purchase_price: data.purchase_price,
-        selling_price: data.selling_price,
-        supplier_code: data.supplier_code
-      };
-      setFormData(persistentFields);
-      
-      // Calculate total quantity
       const totalQuantity = isPack 
         ? numBoxes * piecesPerBox + (data.quantity || 0)
         : data.quantity || 0;
       
-      // Set price per piece based on pack status
       const price_per_piece = isPack && piecesPerBox > 1 
         ? data.price_per_piece 
         : data.selling_price;
@@ -180,10 +171,9 @@ export default function AddInventory() {
 
       setSavedItem(item);
       toast({
-        title: "Item Added Successfully",
-        description: `Item code: ${itemCode}`,
+        title: "Item Added",
+        description: `Code: ${itemCode}`,
       });
-      reset();
     } catch (error: any) {
       toast({
         title: "Error",
@@ -195,81 +185,20 @@ export default function AddInventory() {
     }
   };
 
-  const downloadQRLabels = () => {
-    if (!savedItem) return;
-
-    const doc = new jsPDF();
-    const labelsPerRow = 3;
-    const labelsPerCol = 5;
-    const labelWidth = 60;
-    const labelHeight = 60; // Increased height to fit additional info
-    const startX = 15;
-    const startY = 15;
-    const isPackItem = savedItem.pieces_per_box > 1;
-
-    // Calculate number of boxes needed (one label per box, not per piece)
-    const totalBoxes = Math.ceil(savedItem.quantity / (savedItem.pieces_per_box || 1));
-    const totalLabels = isPackItem ? totalBoxes : savedItem.quantity;
-
-    for (let i = 0; i < totalLabels; i++) {
-      const pageIndex = Math.floor(i / (labelsPerRow * labelsPerCol));
-      const posInPage = i % (labelsPerRow * labelsPerCol);
-      const col = posInPage % labelsPerRow;
-      const row = Math.floor(posInPage / labelsPerRow);
-
-      if (i > 0 && posInPage === 0) {
-        doc.addPage();
-      }
-
-      const x = startX + col * labelWidth;
-      const y = startY + row * labelHeight;
-
-      // Draw label border
-      doc.rect(x, y, labelWidth - 5, labelHeight - 5);
-
-      // Add item code
-      doc.setFontSize(8);
-      doc.text(savedItem.item_code, x + (labelWidth - 5) / 2, y + 10, { align: "center" });
-      
-      // Add price
-      doc.setFontSize(10);
-      doc.text(`₹${savedItem.selling_price}`, x + (labelWidth - 5) / 2, y + 20, { align: "center" });
-      
-      // Add pack size info if applicable
-      if (isPackItem) {
-        doc.setFontSize(8);
-        doc.text(
-          `Pack of ${savedItem.pieces_per_box}`, 
-          x + (labelWidth - 5) / 2, 
-          y + 30, 
-          { align: "center" }
-        );
-      }
-      
-      // Add item name (truncated if too long)
-      const itemName = savedItem.item_name.length > 15 
-        ? savedItem.item_name.substring(0, 15) + '...' 
-        : savedItem.item_name;
-      doc.setFontSize(7);
-      doc.text(itemName, x + (labelWidth - 5) / 2, y + 40, { align: "center" });
-    }
-
-    doc.save(`QR_Labels_${savedItem.item_code}.pdf`);
-    toast({
-      title: "Labels Downloaded",
-      description: `${savedItem.quantity} labels generated`,
-    });
+  const handlePrint = () => {
+    window.print();
   };
 
   return (
     <AppLayout>
-      <div className="max-w-4xl mx-auto space-y-6 animate-fade-in">
+      <div className="max-w-4xl mx-auto space-y-6 animate-fade-in print:hidden">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Add New Stock</h1>
-          <p className="text-muted-foreground">Register new items to your inventory</p>
+          <p className="text-muted-foreground">Register new items & print barcode labels</p>
         </div>
 
         <div className="grid gap-6 lg:grid-cols-2">
+          {/* --- LEFT SIDE: FORM --- */}
           <Card>
             <CardHeader>
               <div className="flex justify-between items-start">
@@ -278,16 +207,9 @@ export default function AddInventory() {
                     <Plus className="h-5 w-5" />
                     Item Details
                   </CardTitle>
-                  <CardDescription>Enter the product information</CardDescription>
                 </div>
-                <Button 
-                  type="button" 
-                  variant="outline" 
-                  size="sm" 
-                  onClick={handleClearForm}
-                  className="flex items-center gap-1"
-                >
-                  <span>Clear Form</span>
+                <Button type="button" variant="outline" size="sm" onClick={handleClearForm}>
+                   <RotateCcw className="h-4 w-4 mr-1"/> Reset
                 </Button>
               </div>
             </CardHeader>
@@ -295,19 +217,19 @@ export default function AddInventory() {
               <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="item_name">Item Name</Label>
-                  <Input id="item_name" {...register("item_name")} placeholder="e.g., Saree/Kurti/Innear wear" />
+                  <Input id="item_name" {...register("item_name")} placeholder="e.g., Saree" />
                   {errors.item_name && <p className="text-sm text-destructive">{errors.item_name.message}</p>}
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="make">Make</Label>
-                    <Input id="make" {...register("make")} placeholder="e.g., Make" />
+                    <Input id="make" {...register("make")} />
                     {errors.make && <p className="text-sm text-destructive">{errors.make.message}</p>}
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="brand_name">Brand Name</Label>
-                    <Input id="brand_name" {...register("brand_name")} placeholder="e.g., Brand" />
+                    <Input id="brand_name" {...register("brand_name")} />
                     {errors.brand_name && <p className="text-sm text-destructive">{errors.brand_name.message}</p>}
                   </div>
                 </div>
@@ -315,173 +237,164 @@ export default function AddInventory() {
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="size">Size</Label>
-                    <select
-                      id="size"
-                      {...register("size")}
-                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {sizes.map(size => (
-                        <option key={size} value={size}>
-                          {size}
-                        </option>
-                      ))}
+                    <select id="size" {...register("size")} className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+                      {sizes.map(size => <option key={size} value={size}>{size}</option>)}
                     </select>
-                    {errors.size && <p className="text-sm text-destructive">{errors.size.message}</p>}
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="purchase_price">Purchase Price (₹)</Label>
-                    <Input id="purchase_price" type="number" step="0.01" {...register("purchase_price")} placeholder="0.00" />
+                    <Label htmlFor="purchase_price">Purchase Price</Label>
+                    <Input id="purchase_price" type="number" step="0.01" {...register("purchase_price")} />
                     {errors.purchase_price && <p className="text-sm text-destructive">{errors.purchase_price.message}</p>}
                   </div>
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="selling_price">Selling Price (₹)</Label>
-                    <Input id="selling_price" type="number" step="0.01" {...register("selling_price")} placeholder="0.00" />
-                    {errors.selling_price && <p className="text-sm text-destructive">{errors.selling_price.message}</p>}
-                  </div>
+                   <Label htmlFor="selling_price">Selling Price (₹)</Label>
+                   <Input id="selling_price" type="number" step="0.01" {...register("selling_price")} />
+                   {errors.selling_price && <p className="text-sm text-destructive">{errors.selling_price.message}</p>}
+                </div>
 
-                <div className="space-y-4 border rounded-lg p-4">
+                {/* Pack Logic Section */}
+                <div className="space-y-4 border rounded-lg p-4 bg-muted/20">
                   <div className="flex items-center justify-between">
-                    <div>
-                      <h4 className="font-medium">Pack Item</h4>
-                      <p className="text-sm text-muted-foreground">
-                        Enable if this item is sold in packs/boxes with multiple pieces
-                      </p>
-                    </div>
-                    <div className="flex items-center space-x-2">
-                      <Switch 
-                        id="is_pack" 
-                        checked={isPack} 
-                        onCheckedChange={(checked) => {
-                          if (!checked) {
-                            // When turning off pack mode, reset to single item mode
-                            setValue('is_pack', false);
-                            setValue('pieces_per_box', 1);
-                            setValue('number_of_boxes', 0);
-                            setValue('price_per_piece', undefined);
-                            setValue('quantity', 1);
-                          } else {
-                            // When enabling pack mode, initialize pack fields
-                            setValue('is_pack', true);
-                            setValue('pieces_per_box', 1);
-                            setValue('number_of_boxes', 1);
-                            setValue('price_per_piece', 0);
-                            setValue('quantity', 1);
-                          }
-                        }} 
-                      />
-                      <Label htmlFor="is_pack">Pack Item</Label>
-                    </div>
+                    <Label htmlFor="is_pack">Pack Item?</Label>
+                    <Switch 
+                      id="is_pack" 
+                      checked={isPack} 
+                      onCheckedChange={(checked) => {
+                        setValue('is_pack', checked);
+                        if (!checked) {
+                           setValue('pieces_per_box', 1);
+                           setValue('number_of_boxes', 0);
+                           setValue('quantity', 1);
+                           setValue('price_per_piece', 0); // Safe to set to 0 now
+                        } else {
+                           setValue('number_of_boxes', 1);
+                        }
+                      }} 
+                    />
                   </div>
 
-                  {watch('is_pack') ? (
-                    <div className="space-y-4 pl-7 pt-2">
-                      <div className="space-y-2">
-                        <Label htmlFor="price_per_piece">Price per Piece (₹)</Label>
-                        <Input 
-                          id="price_per_piece" 
-                          type="number" 
-                          min="0.01"
-                          step="0.01"
-                          {...register("price_per_piece")} 
-                          placeholder="e.g., 100.00" 
-                        />
+                  {isPack ? (
+                    <div className="space-y-3">
+                       <div className="space-y-2">
+                        <Label>Price Per Piece</Label>
+                        <Input type="number" step="0.01" {...register("price_per_piece")} />
                         {errors.price_per_piece && <p className="text-sm text-destructive">{errors.price_per_piece.message}</p>}
-                      </div>
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                          <Label htmlFor="pieces_per_box">Pieces per Pack</Label>
-                          <Input 
-                            id="pieces_per_box" 
-                            type="number" 
-                            min="1"
-                            {...register("pieces_per_box")} 
-                            placeholder="e.g., 3" 
-                          />
-                          {errors.pieces_per_box && <p className="text-sm text-destructive">{errors.pieces_per_box.message}</p>}
-                        </div>
-                        <div className="space-y-2">
-                          <Label htmlFor="number_of_boxes">Number of Packs</Label>
-                          <Input 
-                            id="number_of_boxes" 
-                            type="number" 
-                            min="0"
-                            {...register("number_of_boxes")} 
-                            placeholder="e.g., 5" 
-                          />
-                          {errors.number_of_boxes && <p className="text-sm text-destructive">{errors.number_of_boxes.message}</p>}
-                        </div>
-                      </div>
-                      <div className="space-y-2 pt-2">
-                        <Label>Total Quantity</Label>
-                        <div className="flex items-center gap-2">
-                          <Input 
-                            type="number" 
-                            readOnly 
-                            value={numberOfBoxes * piecesPerBox} 
-                            className="bg-muted"
-                          />
-                          <span className="text-sm text-muted-foreground whitespace-nowrap">
-                            ({numberOfBoxes} pack{numberOfBoxes !== 1 ? 's' : ''} × {piecesPerBox} pcs = {numberOfBoxes * piecesPerBox} pcs)
-                          </span>
-                        </div>
-                      </div>
+                       </div>
+                       <div className="grid grid-cols-2 gap-4">
+                         <div className="space-y-2">
+                            <Label>Pcs per Pack</Label>
+                            <Input type="number" {...register("pieces_per_box")} />
+                         </div>
+                         <div className="space-y-2">
+                            <Label>No. of Packs</Label>
+                            <Input type="number" {...register("number_of_boxes")} />
+                         </div>
+                       </div>
+                       <div className="text-sm text-muted-foreground pt-1">
+                          Total Qty: {numberOfBoxes * piecesPerBox} pieces
+                       </div>
                     </div>
                   ) : (
                     <div className="space-y-2">
                       <Label htmlFor="quantity">Quantity</Label>
-                      <Input 
-                        id="quantity" 
-                        type="number" 
-                        min="1"
-                        {...register("quantity")} 
-                        placeholder="Enter quantity"
-                      />
-                      {errors.quantity && <p className="text-sm text-destructive">{errors.quantity.message}</p>}
+                      <Input id="quantity" type="number" min="1" {...register("quantity")} />
                     </div>
                   )}
-                <div className="space-y-2">
-                  <Label htmlFor="supplier_code">Supplier Code</Label>
-                  <Input id="supplier_code" {...register("supplier_code")} placeholder="e.g., SUP-001" />
-                  {errors.supplier_code && <p className="text-sm text-destructive">{errors.supplier_code.message}</p>}
+                  <div className="space-y-2">
+                    <Label htmlFor="supplier_code">Supplier Code</Label>
+                    <Input id="supplier_code" {...register("supplier_code")} />
+                    {errors.supplier_code && <p className="text-sm text-destructive">{errors.supplier_code.message}</p>}
+                  </div>
                 </div>
-              </div>
 
-              <Button type="submit" className="w-full mt-4" disabled={isLoading}>
-                {isLoading ? "Saving..." : "Save Item"}
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
+                <Button type="submit" className="w-full" disabled={isLoading}>
+                  {isLoading ? "Saving..." : "Save Item"}
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
 
+          {/* --- RIGHT SIDE: PREVIEW SECTION --- */}
           {savedItem && (
-            <Card className="animate-fade-in">
+            <Card className="animate-fade-in border-green-200 bg-green-50/20">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <QrCode className="h-5 w-5" />
-                  QR Code Generated
+                  <Printer className="h-5 w-5" /> Barcode Generated
                 </CardTitle>
-                <CardDescription>Item code: {savedItem.item_code}</CardDescription>
+                <CardDescription>Code: {savedItem.item_code}</CardDescription>
               </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex justify-center p-4 bg-card rounded-lg border">
-                  <QRCode value={savedItem.item_code} size={150} />
+              <CardContent className="space-y-6">
+                
+                {/* Single Label Preview */}
+                <div className="flex justify-center">
+                   <div className="border border-gray-300 bg-white p-2 w-[220px] shadow-sm flex flex-col items-center text-center">
+                      <div className="font-bold text-sm">प्रगती'ज सखी कलेक्शन</div>
+                      <div className="text-[10px] text-gray-600">साई भवन, शहापूर</div>
+                      
+                      <div className="my-1 font-bold text-xl">₹{savedItem.selling_price}</div>
+                      
+                      <Barcode 
+                        value={savedItem.item_code} 
+                        height={30} 
+                        width={1.5} 
+                        fontSize={12} 
+                        displayValue={true}
+                        margin={0}
+                      />
+                      
+                      <div className="mt-1 text-[8px] leading-tight text-gray-500 w-full px-1">
+                        सूचना:- सिल्क, जरी & फॅन्सी साड्या ड्रायकलिन कराव्यात. त्यांची कुठलीही गॅरंटी नाही.
+                      </div>
+                   </div>
                 </div>
-                <div className="text-center space-y-1">
-                  <p className="font-medium">{savedItem.item_name}</p>
-                  <p className="text-2xl font-bold text-primary">₹{savedItem.selling_price}</p>
-                  <p className="text-sm text-muted-foreground">Qty: {savedItem.quantity}</p>
+
+                <div className="text-center">
+                  <p className="text-sm text-muted-foreground mb-2">
+                    This will generate <strong>{savedItem.quantity}</strong> labels.
+                  </p>
+                  <Button onClick={handlePrint} className="w-full" size="lg">
+                    <Printer className="mr-2 h-4 w-4" />
+                    Print Labels
+                  </Button>
                 </div>
-                <Button onClick={downloadQRLabels} className="w-full" variant="outline">
-                  <Download className="mr-2 h-4 w-4" />
-                  Download QR Labels ({savedItem.quantity})
-                </Button>
               </CardContent>
             </Card>
           )}
         </div>
       </div>
+
+      {/* --- HIDDEN PRINT AREA --- */}
+      {savedItem && (
+        <div id="printable-labels" className="hidden print:block">
+          <style type="text/css" media="print">
+            {`
+              body * { visibility: hidden; }
+              #printable-labels, #printable-labels * { visibility: visible; }
+              #printable-labels { position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 0; background-color: white; }
+              @page { size: auto; margin: 5mm; }
+            `}
+          </style>
+          <div className="grid grid-cols-3 gap-2">
+            {Array.from({ length: savedItem.pieces_per_box > 1 ? Math.ceil(savedItem.quantity / savedItem.pieces_per_box) : savedItem.quantity }).map((_, i) => (
+              <div key={i} className="border border-gray-400 bg-white p-1 flex flex-col items-center text-center h-[160px] justify-between break-inside-avoid">
+                <div className="w-full">
+                  <div className="font-bold text-sm text-black">प्रगती'ज सखी कलेक्शन</div>
+                  <div className="text-[10px] text-gray-800">साई भवन, शहापूर</div>
+                </div>
+                <div className="font-extrabold text-xl text-black">₹{savedItem.selling_price}</div>
+                <div className="w-full flex justify-center overflow-hidden">
+                  <Barcode value={savedItem.item_code} height={35} width={1.4} fontSize={11} displayValue={true} margin={2} />
+                </div>
+                <div className="text-[7px] leading-tight text-black w-full px-1 mt-1">
+                   सूचना:- सिल्क, जरी & फॅन्सी साड्या ड्रायकलिन कराव्यात. गॅरंटी नाही.
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </AppLayout>
   );
 }

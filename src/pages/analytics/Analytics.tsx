@@ -3,6 +3,7 @@ import { AppLayout } from "@/components/layout/AppLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
   TableBody,
@@ -25,14 +26,17 @@ import {
 } from "recharts";
 import * as XLSX from "xlsx";
 import {
-  Package,
   TrendingUp,
-  AlertTriangle,
   Download,
   Search,
-  IndianRupee,
-  Wallet, // Added Wallet icon for Investment visualization
+  Wallet,
+  Banknote,
+  AlertCircle,
+  Users,
+  AlertTriangle,
+  ArrowRight
 } from "lucide-react";
+import { startOfWeek, startOfMonth } from "date-fns";
 
 type DailySales = {
   date: string;
@@ -42,26 +46,44 @@ type DailySales = {
 export default function Analytics() {
   const [items, setItems] = useState<Item[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
+  const [dateRange, setDateRange] = useState("month"); 
   
-  // State for Inventory Values
-  const [totalPurchaseValue, setTotalPurchaseValue] = useState(0); // Cost to owner
-  const [totalSellingValue, setTotalSellingValue] = useState(0);   // Potential revenue
-  
-  const [todaySales, setTodaySales] = useState(0);
-  const [monthSales, setMonthSales] = useState(0);
-  const [lowStockCount, setLowStockCount] = useState(0);
-  const [salesData, setSalesData] = useState<DailySales[]>([]);
+  // Stats State
+  const [metrics, setMetrics] = useState({
+    totalSales: 0,
+    cashCollected: 0,
+    pendingUdhaar: 0,
+    totalPurchaseValue: 0, 
+    totalSellingValue: 0,  
+    lowStockCount: 0
+  });
+
+  const [salesData, setSalesData] = useState<DailySales[]>([]); 
+  const [recentUdhaar, setRecentUdhaar] = useState<any[]>([]); 
   const [isLoading, setIsLoading] = useState(true);
   const { toast } = useToast();
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [dateRange]); 
+
+  const getDateFilter = () => {
+    const now = new Date();
+    switch (dateRange) {
+      case "today": 
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        return today;
+      case "week": return startOfWeek(now);
+      case "month": return startOfMonth(now);
+      default: return null;
+    }
+  };
 
   const fetchData = async () => {
     setIsLoading(true);
     try {
-      // Fetch all items
+      // 1. FETCH ITEMS
       const { data: itemsData, error: itemsError } = await supabase
         .from("items")
         .select("*")
@@ -70,59 +92,59 @@ export default function Analytics() {
       if (itemsError) throw itemsError;
       setItems(itemsData || []);
 
-      // --- NEW CALCULATIONS HERE ---
-      // 1. Calculate Total Investment (Purchase Price * Quantity)
-      const purchaseVal = (itemsData || []).reduce(
-        (sum, item) => sum + (item.purchase_price || 0) * item.quantity,
-        0
-      );
-      setTotalPurchaseValue(purchaseVal);
-
-      // 2. Calculate Total Potential Revenue (Selling Price * Quantity)
-      const sellingVal = (itemsData || []).reduce(
-        (sum, item) => sum + (item.selling_price || 0) * item.quantity,
-        0
-      );
-      setTotalSellingValue(sellingVal);
-      // -----------------------------
-
-      // Count low stock items (less than 5)
+      const purchaseVal = (itemsData || []).reduce((sum, item) => sum + (item.purchase_price || 0) * item.quantity, 0);
+      const sellingVal = (itemsData || []).reduce((sum, item) => sum + (item.selling_price || 0) * item.quantity, 0);
       const lowStock = (itemsData || []).filter((item) => item.quantity < 5).length;
-      setLowStockCount(lowStock);
 
-      // Fetch today's sales
-      const today = new Date().toISOString().split("T")[0];
-      const { data: todayBills, error: todayError } = await supabase
+      // 2. FETCH BILLS
+      const startDate = getDateFilter();
+      let query = supabase.from("bills").select("*");
+      
+      if (startDate) {
+        query = query.gte("created_at", startDate.toISOString());
+      }
+      
+      const { data: bills, error: billsError } = await query;
+      if (billsError) throw billsError;
+
+      let totalSales = 0;
+      let cashCollected = 0;
+      let pendingUdhaar = 0;
+
+      (bills || []).forEach(bill => {
+        const amount = Math.abs(bill.final_amount);
+        totalSales += amount;
+        if (bill.payment_status === 'pending') {
+          pendingUdhaar += amount;
+        } else {
+          cashCollected += amount;
+        }
+      });
+
+      setMetrics({
+        totalPurchaseValue: purchaseVal,
+        totalSellingValue: sellingVal,
+        lowStockCount: lowStock,
+        totalSales,
+        cashCollected,
+        pendingUdhaar
+      });
+
+      // 3. FETCH RECENT UDHAAR
+      const { data: pendingBills } = await supabase
         .from("bills")
-        .select("final_amount")
-        .gte("created_at", `${today}T00:00:00`)
-        .lte("created_at", `${today}T23:59:59`)
-        .gt("final_amount", 0);
+        .select("*")
+        .eq("payment_status", "pending")
+        .order("created_at", { ascending: false })
+        .limit(5);
+      
+      setRecentUdhaar(pendingBills || []);
 
-      if (todayError) throw todayError;
-      const todayTotal = (todayBills || []).reduce((sum, bill) => sum + bill.final_amount, 0);
-      setTodaySales(todayTotal);
-
-      // Fetch month sales
-      const firstOfMonth = new Date();
-      firstOfMonth.setDate(1);
-      firstOfMonth.setHours(0, 0, 0, 0);
-
-      const { data: monthBills, error: monthError } = await supabase
-        .from("bills")
-        .select("final_amount")
-        .gte("created_at", firstOfMonth.toISOString())
-        .gt("final_amount", 0);
-
-      if (monthError) throw monthError;
-      const monthTotal = (monthBills || []).reduce((sum, bill) => sum + bill.final_amount, 0);
-      setMonthSales(monthTotal);
-
-      // Fetch last 7 days sales for chart
+      // 4. FETCH CHART DATA
       const last7Days: DailySales[] = [];
       for (let i = 6; i >= 0; i--) {
         const date = new Date();
-        const displayDate = new Date(date); // Copy for display
+        const displayDate = new Date(date);
         date.setDate(date.getDate() - i);
         displayDate.setDate(displayDate.getDate() - i);
         
@@ -142,6 +164,7 @@ export default function Analytics() {
         });
       }
       setSalesData(last7Days);
+
     } catch (error: any) {
       toast({
         title: "Error",
@@ -153,137 +176,186 @@ export default function Analytics() {
     }
   };
 
+  const formatCurrency = (val: number) => 
+    new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(val);
+
+  const formatCompactNumber = (number: number) => {
+    return new Intl.NumberFormat('en-IN', { notation: "compact", compactDisplay: "short" }).format(number);
+  };
+
   const filteredItems = items
     .filter(
       (item) =>
         item.item_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.brand_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (item.supplier_code && item.supplier_code.toLowerCase().includes(searchQuery.toLowerCase())) ||
+        item.brand_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
         item.item_code.toLowerCase().includes(searchQuery.toLowerCase())
     )
     .map(item => ({
       ...item,
       stockDisplay: item.pieces_per_box > 1 
-        ? `${Math.floor(item.quantity / item.pieces_per_box)} unit${Math.floor(item.quantity / item.pieces_per_box) !== 1 ? 's' : ''} + ${item.quantity % item.pieces_per_box} pc${item.quantity % item.pieces_per_box !== 1 ? 's' : ''}`
-        : `${item.quantity} pc${item.quantity !== 1 ? 's' : ''}`
+        ? `${Math.floor(item.quantity / item.pieces_per_box)} : ${item.quantity % item.pieces_per_box}`
+        : `${item.quantity}`
     }));
 
   const exportToExcel = () => {
     const exportData = filteredItems.map((item) => ({
-      "Item Code": item.item_code,
-      "Item Name": item.item_name,
-      Make: item.make,
-      Brand: item.brand_name,
-      "Purchase Price": item.purchase_price,
-      "Selling Price": item.selling_price,
-      "Supplier Code": item.supplier_code,
-      "Pieces per Unit": item.pieces_per_box,
-      "Total Pieces": item.quantity,
-      "Stock Display": item.stockDisplay,
+      "Code": item.item_code,
+      "Name": item.item_name,
+      "Brand": item.brand_name,
+      "Sell Price": item.selling_price,
+      "Stock": item.quantity
     }));
 
     const ws = XLSX.utils.json_to_sheet(exportData);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Inventory");
     XLSX.writeFile(wb, `Inventory_${new Date().toISOString().split("T")[0]}.xlsx`);
-
-    toast({
-      title: "Export Complete",
-      description: "Inventory data exported to Excel",
-    });
+    toast({ title: "Exported", description: "Excel file downloaded" });
   };
 
   return (
     <AppLayout>
-      <div className="space-y-6 animate-fade-in">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Analytics Dashboard</h1>
-          <p className="text-muted-foreground">Overview of your inventory and sales</p>
-        </div>
-
-        {/* Stats Cards */}
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="space-y-4 animate-fade-in pb-20 md:pb-0">
+        
+        {/* APP HEADER */}
+        <div className="flex flex-col gap-4 sticky top-0 bg-background/95 backdrop-blur z-10 py-2 -mx-4 px-4 border-b md:static md:border-0 md:p-0">
+          <div className="flex items-center justify-between">
+            <h1 className="text-xl font-bold tracking-tight">Analytics</h1>
+            <span className="text-xs text-muted-foreground bg-secondary px-2 py-1 rounded-full">
+               {dateRange === 'all' ? 'All Time' : dateRange.charAt(0).toUpperCase() + dateRange.slice(1)}
+            </span>
+          </div>
           
-          {/* UPDATED CARD: Inventory Valuation */}
-          <Card className="border-l-4 border-l-primary">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Inventory Valuation</CardTitle>
-              <Wallet className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-1">
-                <span className="text-xs text-muted-foreground uppercase font-bold tracking-wider">Total Investment</span>
-                <div className="text-2xl font-bold">₹{totalPurchaseValue.toLocaleString()}</div>
+          <Tabs defaultValue="month" value={dateRange} onValueChange={setDateRange} className="w-full">
+            <TabsList className="w-full grid grid-cols-4">
+              <TabsTrigger value="today" className="text-xs">Today</TabsTrigger>
+              <TabsTrigger value="week" className="text-xs">Week</TabsTrigger>
+              <TabsTrigger value="month" className="text-xs">Month</TabsTrigger>
+              <TabsTrigger value="all" className="text-xs">All</TabsTrigger>
+            </TabsList>
+          </Tabs>
+        </div>
+
+        {/* METRICS GRID - Mobile Optimized (2 cols) */}
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          
+          {/* Total Sales */}
+          <Card className="shadow-sm">
+            <CardContent className="p-4 flex flex-col justify-between h-full">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs text-muted-foreground font-medium">SALES</span>
+                <TrendingUp className="h-3 w-3 text-muted-foreground" />
               </div>
-              
-              <div className="mt-3 pt-2 border-t flex justify-between items-center text-sm">
-                <span className="text-muted-foreground">Potential Sales Value:</span>
-                <span className="font-semibold text-green-600">₹{totalSellingValue.toLocaleString()}</span>
+              <div className="text-lg font-bold">{formatCompactNumber(metrics.totalSales)}</div>
+            </CardContent>
+          </Card>
+
+          {/* Cash Collected */}
+          <Card className="shadow-sm bg-green-50/40 border-green-100">
+            <CardContent className="p-4 flex flex-col justify-between h-full">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs text-green-700 font-medium">CASH</span>
+                <Banknote className="h-3 w-3 text-green-600" />
+              </div>
+              <div className="text-lg font-bold text-green-700">{formatCompactNumber(metrics.cashCollected)}</div>
+            </CardContent>
+          </Card>
+
+          {/* Pending Udhaar */}
+          <Card className="shadow-sm bg-orange-50/40 border-orange-100 col-span-2 md:col-span-1">
+            <CardContent className="p-4 flex flex-row md:flex-col items-center justify-between">
+              <div className="flex flex-col">
+                 <span className="text-xs text-orange-700 font-medium mb-1">UDHAAR (PENDING)</span>
+                 <div className="text-2xl font-bold text-orange-700">{formatCurrency(metrics.pendingUdhaar)}</div>
+              </div>
+              <div className="h-10 w-10 bg-orange-100 rounded-full flex items-center justify-center">
+                 <AlertCircle className="h-5 w-5 text-orange-600" />
               </div>
             </CardContent>
           </Card>
 
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Today's Sales</CardTitle>
-              <TrendingUp className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-success">₹{todaySales.toLocaleString()}</div>
-              <p className="text-xs text-muted-foreground">Real-time tracking</p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">This Month</CardTitle>
-              <Package className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">₹{monthSales.toLocaleString()}</div>
-              <p className="text-xs text-muted-foreground">
-                {new Date().toLocaleDateString("en-US", { month: "long" })}
-              </p>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Low Stock Alerts</CardTitle>
-              <AlertTriangle className="h-4 w-4 text-warning" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-warning">{lowStockCount}</div>
-              <p className="text-xs text-muted-foreground">Items below 5 units</p>
+          {/* Inventory Valuation */}
+          <Card className="shadow-sm border-l-4 border-l-primary col-span-2 md:col-span-1">
+            <CardContent className="p-4">
+              <div className="flex items-center gap-2 mb-2">
+                 <Wallet className="h-3 w-3 text-muted-foreground" />
+                 <span className="text-xs text-muted-foreground font-bold">STOCK VALUE</span>
+              </div>
+              <div className="flex justify-between items-end">
+                <div>
+                   <div className="text-xs text-muted-foreground">Invested</div>
+                   <div className="text-lg font-bold">{formatCompactNumber(metrics.totalPurchaseValue)}</div>
+                </div>
+                <div className="text-right">
+                   <div className="text-xs text-muted-foreground">Potential</div>
+                   <div className="text-sm font-semibold text-green-600">{formatCompactNumber(metrics.totalSellingValue)}</div>
+                </div>
+              </div>
             </CardContent>
           </Card>
         </div>
 
-        {/* Sales Chart */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Sales - Last 7 Days</CardTitle>
+        {/* PENDING PAYMENTS (Horizontal Scroll on Mobile) */}
+        {recentUdhaar.length > 0 && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between px-1">
+              <h2 className="text-sm font-semibold flex items-center gap-2">
+                <Users className="h-4 w-4" /> Pending Payments
+              </h2>
+              <Button variant="ghost" size="sm" className="h-6 text-xs text-muted-foreground">View All <ArrowRight className="ml-1 h-3 w-3"/></Button>
+            </div>
+            <div className="flex overflow-x-auto gap-3 pb-2 -mx-4 px-4 md:grid md:grid-cols-3 md:gap-4 md:overflow-visible md:mx-0 md:px-0">
+              {recentUdhaar.map((bill) => (
+                <Card key={bill.id} className="min-w-[240px] border-orange-100 bg-orange-50/10">
+                  <CardContent className="p-3">
+                    <div className="flex justify-between items-start mb-2">
+                      <div>
+                        <div className="font-semibold text-sm">{bill.customer_name || "Unknown"}</div>
+                        <div className="text-xs text-muted-foreground">{bill.customer_phone}</div>
+                      </div>
+                      <Badge variant="outline" className="text-[10px] bg-white text-orange-600 border-orange-200">
+                        {new Date(bill.created_at).toLocaleDateString(undefined, {month:'short', day:'numeric'})}
+                      </Badge>
+                    </div>
+                    <div className="flex justify-between items-center mt-3 pt-3 border-t border-orange-100">
+                      <span className="text-xs text-muted-foreground">Amount Due</span>
+                      <span className="font-bold text-orange-700">₹{bill.final_amount}</span>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* CHART SECTION */}
+        <Card className="shadow-sm">
+          <CardHeader className="p-4 pb-0">
+            <CardTitle className="text-sm font-medium">Sales Trend (7 Days)</CardTitle>
           </CardHeader>
-          <CardContent>
-            <div className="h-[300px]">
+          <CardContent className="p-4">
+            <div className="h-[200px] w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={salesData}>
-                  <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                  <XAxis dataKey="date" className="text-xs" />
-                  <YAxis className="text-xs" />
+                  <defs>
+                    <linearGradient id="colorSales" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.3}/>
+                      <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0}/>
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} className="stroke-muted/50" />
+                  <XAxis dataKey="date" tick={{fontSize: 10}} axisLine={false} tickLine={false} />
+                  <YAxis hide />
                   <Tooltip
-                    contentStyle={{
-                      backgroundColor: "hsl(var(--card))",
-                      border: "1px solid hsl(var(--border))",
-                      borderRadius: "var(--radius)",
-                    }}
-                    formatter={(value: number) => [`₹${value.toLocaleString()}`, "Sales"]}
+                    contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
+                    formatter={(value: number) => [`₹${value}`, ""]}
                   />
                   <Area
                     type="monotone"
                     dataKey="amount"
                     stroke="hsl(var(--primary))"
-                    fill="hsl(var(--primary) / 0.2)"
+                    fillOpacity={1}
+                    fill="url(#colorSales)"
                     strokeWidth={2}
                   />
                 </AreaChart>
@@ -292,83 +364,69 @@ export default function Analytics() {
           </CardContent>
         </Card>
 
-        {/* Inventory Table */}
-        <Card>
-          <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-            <CardTitle>Inventory</CardTitle>
-            <div className="flex gap-2">
-              <div className="relative flex-1 sm:w-64">
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  placeholder="Search items..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-9"
-                />
-              </div>
-              <Button onClick={exportToExcel} variant="outline">
-                <Download className="h-4 w-4 mr-2" /> Export
-              </Button>
+        {/* INVENTORY LIST */}
+        <Card className="shadow-sm border-0 md:border">
+          <CardHeader className="p-4 flex flex-row items-center justify-between bg-muted/20">
+            <div>
+              <CardTitle className="text-base">Inventory</CardTitle>
+              {metrics.lowStockCount > 0 && (
+                 <span className="text-xs text-red-500 font-medium flex items-center gap-1 mt-1">
+                   <AlertTriangle className="h-3 w-3" /> {metrics.lowStockCount} Low Stock
+                 </span>
+              )}
             </div>
+            <Button size="icon" variant="outline" onClick={exportToExcel} className="h-8 w-8">
+              <Download className="h-4 w-4" />
+            </Button>
           </CardHeader>
-          <CardContent>
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Item Code</TableHead>
-                    <TableHead>Name</TableHead>
-                    <TableHead className="hidden md:table-cell">Brand</TableHead>
-                    <TableHead className="hidden lg:table-cell">Supplier</TableHead>
-                    <TableHead className="text-center">Size</TableHead>
-                    <TableHead className="text-right">Buy Price</TableHead>
-                    <TableHead className="text-right">Sell Price</TableHead>
-                    <TableHead className="text-right">Stock</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {isLoading ? (
-                    <TableRow>
-                      <TableCell colSpan={8} className="text-center py-8">
-                        Loading...
-                      </TableCell>
-                    </TableRow>
-                  ) : filteredItems.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
-                        No items found
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    filteredItems.map((item) => (
-                      <TableRow key={item.id}>
-                        <TableCell className="font-mono text-sm">{item.item_code}</TableCell>
-                        <TableCell className="font-medium">{item.item_name}</TableCell>
-                        <TableCell className="hidden md:table-cell">{item.brand_name}</TableCell>
-                        <TableCell className="hidden lg:table-cell">{item.supplier_code}</TableCell>
-                        <TableCell className="text-center">
-                          {item.size && item.size !== 'Free Size' && (
-                            <Badge variant="outline" className="text-xs">
-                              {item.size}
-                            </Badge>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right text-muted-foreground">₹{item.purchase_price}</TableCell>
-                        <TableCell className="text-right font-medium">₹{item.selling_price}</TableCell>
-                        <TableCell className="text-right">
-                          <Badge 
-                            variant={item.quantity === 0 ? "destructive" : item.quantity <= 5 ? "destructive" : "outline"}
-                            className="whitespace-nowrap"
-                          >
-                            {item.stockDisplay}
-                          </Badge>
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
+          
+          <div className="p-2 border-b">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="Search..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-9 h-9 text-sm bg-muted/30 border-none"
+              />
             </div>
+          </div>
+
+          <CardContent className="p-0">
+            <Table>
+              <TableHeader>
+                <TableRow className="text-xs hover:bg-transparent">
+                  <TableHead className="w-[50%] pl-4">Item</TableHead>
+                  <TableHead className="text-right">Price</TableHead>
+                  <TableHead className="text-right pr-4">Stock</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {isLoading ? (
+                  <TableRow><TableCell colSpan={3} className="text-center py-8">Loading...</TableCell></TableRow>
+                ) : filteredItems.length === 0 ? (
+                  <TableRow><TableCell colSpan={3} className="text-center py-8 text-muted-foreground">No items</TableCell></TableRow>
+                ) : (
+                  filteredItems.map((item) => (
+                    <TableRow key={item.id} className="border-b-muted/50">
+                      <TableCell className="py-3 pl-4">
+                        <div className="font-medium text-sm truncate max-w-[160px]">{item.item_name}</div>
+                        <div className="text-[10px] text-muted-foreground font-mono">{item.item_code}</div>
+                      </TableCell>
+                      <TableCell className="text-right py-3 text-sm">₹{item.selling_price}</TableCell>
+                      <TableCell className="text-right py-3 pr-4">
+                        <Badge 
+                          variant={item.quantity <= 5 ? "destructive" : "secondary"}
+                          className={`text-[10px] h-5 px-1.5 ${item.quantity > 5 ? 'bg-muted text-foreground hover:bg-muted' : ''}`}
+                        >
+                          {item.stockDisplay}
+                        </Badge>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
           </CardContent>
         </Card>
       </div>

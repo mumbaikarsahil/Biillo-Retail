@@ -10,6 +10,8 @@ const navItems = [
   { href: "/billing", label: "Billing", icon: ShoppingCart },
   { href: "/analytics", label: "Analytics", icon: Package },
   { href: "/manage", label: "Manage", icon: Package },
+  { href: "/udhaar", label: "Udhaar", icon: Package },
+  { href: "/sales", label: "Sales", icon: Package },
 ];
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
