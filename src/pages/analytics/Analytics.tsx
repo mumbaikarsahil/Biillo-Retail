@@ -4,6 +4,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Capacitor } from "@capacitor/core";
+import { Filesystem, Directory } from "@capacitor/filesystem";
+import { Share } from "@capacitor/share";
 import {
   Table,
   TableBody,
@@ -197,21 +200,61 @@ export default function Analytics() {
         : `${item.quantity}`
     }));
 
-  const exportToExcel = () => {
-    const exportData = filteredItems.map((item) => ({
-      "Code": item.item_code,
-      "Name": item.item_name,
-      "Brand": item.brand_name,
-      "Sell Price": item.selling_price,
-      "Stock": item.quantity
-    }));
-
-    const ws = XLSX.utils.json_to_sheet(exportData);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Inventory");
-    XLSX.writeFile(wb, `Inventory_${new Date().toISOString().split("T")[0]}.xlsx`);
-    toast({ title: "Exported", description: "Excel file downloaded" });
-  };
+    const exportToExcel = async () => {
+      try {
+        // 1. Prepare Data
+        const exportData = filteredItems.map((item) => ({
+          "Code": item.item_code,
+          "Name": item.item_name,
+          "Brand": item.brand_name,
+          "Sell Price": item.selling_price,
+          "Stock": item.quantity
+        }));
+  
+        const ws = XLSX.utils.json_to_sheet(exportData);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Inventory");
+        const fileName = `Inventory_${new Date().toISOString().split("T")[0]}.xlsx`;
+  
+        // 2. Check Platform
+        if (Capacitor.isNativePlatform()) {
+          // --- MOBILE LOGIC ---
+          
+          // A. Generate Base64 string of the Excel file
+          const excelBase64 = XLSX.write(wb, { bookType: "xlsx", type: "base64" });
+  
+          // B. Save to Device Cache (No permissions needed usually)
+          const path = fileName;
+          const result = await Filesystem.writeFile({
+            path: path,
+            data: excelBase64,
+            directory: Directory.Cache, // Writing to Cache is safest
+          });
+  
+          // C. Open the "Share" sheet so user can save/send it
+          await Share.share({
+            title: "Export Inventory",
+            text: "Here is your inventory file",
+            url: result.uri, // The native file path
+            dialogTitle: "Save or Share Excel",
+          });
+  
+        } else {
+          // --- WEB LOGIC (Keep existing) ---
+          XLSX.writeFile(wb, fileName);
+        }
+  
+        toast({ title: "Success", description: "Sheet generated successfully" });
+  
+      } catch (error: any) {
+        console.error("Export failed:", error);
+        toast({
+          title: "Export Failed",
+          description: error.message || "Could not save file",
+          variant: "destructive",
+        });
+      }
+    };
 
   return (
     <AppLayout>

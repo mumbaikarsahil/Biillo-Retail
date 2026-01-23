@@ -1,33 +1,43 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
-import { AppLayout } from "@/components/layout/AppLayout";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
-import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { useToast } from "@/hooks/use-toast";
-import { supabase, CartItem, Item } from "@/lib/supabase";
-import {
+import { 
   Camera,
   CameraOff,
   Minus,
   Plus,
   Trash2,
   ShoppingCart,
-  RotateCcw,
   Printer,
   MessageCircle,
   Percent,
   DollarSign,
   User,
+  Phone,
+  Search,
+  X,
+  ChevronUp,
+  ChevronDown,
   CreditCard,
-  Phone
+  ArrowLeft,
 } from "lucide-react";
 
+import { AppLayout } from "@/components/layout/AppLayout";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Card, CardContent } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useToast } from "@/hooks/use-toast";
+import { Toast } from '@capacitor/toast'; 
+import { supabase, CartItem, Item } from "@/lib/supabase";
+import { Capacitor } from "@capacitor/core";
+import { BluetoothSerial } from "@awesome-cordova-plugins/bluetooth-serial";
+import { useNavigate } from "react-router-dom";
+
 export default function Billing() {
+  const navigate = useNavigate();
   const [cart, setCart] = useState<CartItem[]>([]);
   const [manualCode, setManualCode] = useState("");
   const [isScanning, setIsScanning] = useState(false);
@@ -38,8 +48,8 @@ export default function Billing() {
   const [customerName, setCustomerName] = useState("");
   // ------------------------
 
-  const [discountType, setDiscountType] = useState<"flat" | "percent">("flat");
-  const [discountValue, setDiscountValue] = useState(0);
+// Store the user's desired final amount as a string to handle empty states easily
+  const [manualFinalAmount, setManualFinalAmount] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [completedBill, setCompletedBill] = useState<any>(null);
@@ -61,8 +71,35 @@ export default function Billing() {
   // Tracks the last code scanned to prevent duplicates
 const lastScannedRef = useRef<{ code: string; time: number }>({ code: "", time: 0 });
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const { toast } = useToast();
+  const { toast: webToast } = useToast();
+
+  // FIX: Explicitly add 'duration' and 'className' to the type definition
+  const showToast = async (props: { 
+    title: string; 
+    description?: string; 
+    variant?: "default" | "destructive";
+    duration?: number; 
+    className?: string;
+  }) => {
+    if (Capacitor.isNativePlatform()) {
+      // --- MOBILE: Native System Toast ---
+      await Toast.show({
+        text: `${props.title}${props.description ? `\n${props.description}` : ''}`,
+        // Map milliseconds to 'short' or 'long' for native
+        duration: (props.duration || 0) > 2000 ? 'long' : 'short',
+        position: 'bottom', 
+      });
+    } else {
+      // --- WEB: Shadcn Toast ---
+      webToast({
+        ...props,
+        // Use the passed className OR fall back to the small style
+        className: props.className || "py-2 px-4 min-h-0", 
+      });
+    }
+  };
   
+  const toast = showToast;
   // Debounce search function
   const searchItems = useCallback(async (query: string) => {
     if (!query) {
@@ -86,8 +123,15 @@ const lastScannedRef = useRef<{ code: string; time: number }>({ code: "", time: 
   }, []);
 
   const subtotal = cart.reduce((sum, item) => sum + item.selling_price * item.cartQuantity, 0);
-  const discountAmount = discountType === "percent" ? (subtotal * discountValue) / 100 : discountValue;
-  const finalTotal = Math.max(0, subtotal - discountAmount);
+  
+  // If user entered a value, use it. Otherwise, Final = Subtotal.
+  const finalTotal = manualFinalAmount === "" ? subtotal : parseFloat(manualFinalAmount);
+  
+  // Calculate the discount needed to reach that final total
+  const discountAmount = Math.max(0, subtotal - finalTotal);
+  
+  // Calculate percentage (for display/printing purposes if needed)
+  const calculatedDiscountPercent = subtotal > 0 ? ((discountAmount / subtotal) * 100).toFixed(1) : "0";
 
   const handleAddToCart = (item: Item, quantity: number) => {
     setCart((prev) => {
@@ -269,7 +313,7 @@ const lastScannedRef = useRef<{ code: string; time: number }>({ code: "", time: 
 
   const clearCart = () => {
     setCart([]);
-    setDiscountValue(0);
+    setManualFinalAmount("");
     setCustomerPhone("");
     setCustomerName(""); // Reset Name
     setIsUdhaar(false);  // Reset Udhaar
@@ -357,139 +401,205 @@ const lastScannedRef = useRef<{ code: string; time: number }>({ code: "", time: 
     }
   };
 
-  const printBill = () => {
-    if (!completedBill) return;
+  // --- OPTIMIZED BLUETOOTH PRINT (App Only) ---
+ // --- MOBILE APP PRINTING (Bluetooth) ---
+// --- MOBILE APP PRINTING (Bluetooth) ---
+// --- HELPER: MOBILE BLUETOOTH PRINT ---
+const printViaBluetooth = async () => {
+  // 1. If not mobile, return false immediately to trigger Web/Windows Print
+  if (!Capacitor.isNativePlatform()) return false;
 
-    const billId = completedBill.id ? String(completedBill.id) : 'N/A';
-    const billDate = completedBill.created_at ? new Date(completedBill.created_at).toLocaleDateString() : new Date().toLocaleDateString();
-    const isUdhaarBill = completedBill.payment_status === 'pending';
-    
-    const printContent = `
-      <div style="font-family: 'Roboto Mono', monospace; max-width: 300px; margin: 0 auto; padding: 20px;">
-        <div style="text-align: center; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px dashed #ddd;">
-          <h1 style="font-size: 20px; font-weight: 700; margin: 0; text-transform: uppercase; letter-spacing: 1px;">
-            Sakhi Collections
-          </h1>
-          <div style="font-size: 16px; margin: 5px 0; font-weight: 500;">Retail Invoice</div>
-          ${isUdhaarBill ? '<div style="font-size: 14px; font-weight:bold; border:1px solid #000; display:inline-block; padding:2px 8px; margin-top:5px;">UDHAAR / CREDIT</div>' : ''}
-        </div>
-        
-        <div style="display: flex; justify-content: space-between; margin: 10px 0; font-size: 13px;">
-          <div>Date: ${billDate}</div>
-          <div>Bill #: ${billId.slice(0, 8).toUpperCase()}</div>
-        </div>
-        ${completedBill.customer_name ? `<div style="font-size:13px;">Cust: ${completedBill.customer_name} (${completedBill.customer_phone})</div>` : ''}
-        
-        <table style="width: 100%; border-collapse: collapse; margin: 15px 0; font-size: 12px;">
-          <thead>
-            <tr>
-              <th style="text-align: left; border-bottom: 1px dashed #ddd; padding: 5px 0; font-weight: 500; width: 50%;">Item</th>
-              <th style="text-align: right; width: 15%; border-bottom: 1px dashed #ddd; padding: 5px 0; font-weight: 500;">Qty</th>
-              <th style="text-align: right; width: 35%; border-bottom: 1px dashed #ddd; padding: 5px 0; font-weight: 500;">Price</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${completedBill.items
-              .map(
-                (item: CartItem) => `
-              <tr>
-                <td style="padding: 4px 0; border-bottom: 1px dashed #eee; vertical-align: top;">
-                  <div style="font-weight: 500;">${item.item_name}</div>
-                  <div style="font-size: 11px; color: #555;">
-                    ${item.brand_name ? item.brand_name + ' • ' : ''}${item.item_code || ''}
-                  </div>
-                </td>
-                <td style="text-align: right; padding: 4px 0; border-bottom: 1px dashed #eee; vertical-align: top;">${item.cartQuantity}</td>
-                <td style="text-align: right; padding: 4px 0; border-bottom: 1px dashed #eee; vertical-align: top;">₹${(item.selling_price * item.cartQuantity).toFixed(2)}</td>
-              </tr>
-            `
-              )
-              .join("")}
-          </tbody>
-        </table>
-        
-        <div style="border-top: 1px dashed #000; margin: 10px 0;"></div>
-        
-        <table style="width: 100%; margin-bottom: 20px;">
-          <tr>
-            <td>Subtotal:</td>
-            <td style="text-align: right;">₹${Math.abs(completedBill.total_amount).toFixed(2)}</td>
-          </tr>
-          ${completedBill.discount_amount > 0
-            ? `
-              <tr>
-                <td>Discount:</td>
-                <td style="text-align: right;">-₹${completedBill.discount_amount.toFixed(2)}</td>
-              </tr>
-            `
-            : ""
-          }
-          <tr style="font-weight: 500;">
-            <td><strong>Total:</strong></td>
-            <td style="text-align: right;"><strong>₹${Math.abs(completedBill.final_amount).toFixed(2)}</strong></td>
-          </tr>
-        </table>
-        
-        <div style="text-align: center; margin-top: 20px; font-style: italic; font-size: 13px;">
-          <div>Thank You</div>
-          <div>Visit Again</div>
-        </div>
-      </div>
-    `;
+  const printerMac = localStorage.getItem("printer_mac");
+  if (!printerMac) {
+    toast({ 
+      variant: "destructive", 
+      title: "No Printer Found", 
+      description: "Go to Settings > Default Printer to pair." 
+    });
+    return false; 
+  }
 
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) {
-      toast({
-        title: "Print Error",
-        description: "Please allow popups to print the bill",
-        variant: "destructive",
+  toast({ title: "Printing...", duration: 2000 });
+
+  try {
+    const isConnected = await BluetoothSerial.isConnected().catch(() => false);
+    if (!isConnected) {
+      await new Promise((resolve, reject) => {
+        BluetoothSerial.connect(printerMac).subscribe(resolve, reject);
       });
-      return;
     }
 
-    printWindow.document.write(`
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <title>Bill #${billId.slice(0, 8)}</title>
-        <meta charset="UTF-8">
-        <style>
-          @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500;700&display=swap');
-          @media print {
-            @page { margin: 0; size: 80mm auto; }
-            body { margin: 0; padding: 0; }
-            .no-print { display: none !important; }
-          }
-          body { 
-            font-family: 'Roboto Mono', monospace; 
-            margin: 0;
-            padding: 0;
-          }
-        </style>
-      </head>
-      <body>
-        ${printContent}
-        <script>
-          setTimeout(() => { window.print(); }, 300);
-        </script>
-      </body>
-      </html>
-    `);
+    // --- ESC/POS COMMANDS ---
+    // (Keep your existing receipt generation logic here)
+    let receipt = "";
+    receipt += "\x1B\x40";       
+    receipt += "\x1B\x61\x01";   
+    receipt += "\x1B\x45\x01";   
+    receipt += "SAKHI COLLECTIONS\n";
+    receipt += "\x1B\x45\x00";   
+    receipt += "Retail Invoice\n";
+    receipt += "--------------------------------\n";
+    // ... rest of your loop for items ...
     
-    printWindow.document.close();
-  };
+    // Footer
+    receipt += "\n\n\n"; 
 
+    // Send
+    await BluetoothSerial.write(receipt);
+    toast({ title: "Printed Successfully", className: "bg-green-600 text-white" });
+    
+    return true; // <--- IMPORTANT: Return true on success
+
+  } catch (error) {
+    console.error("BT Print Error:", error);
+    toast({ variant: "destructive", title: "Printer Error", description: "Could not connect." });
+    return false; // <--- Return false on failure
+  }
+};
+
+// --- MAIN HANDLER: UNIVERSAL PRINT ---
+const printBill = async () => {
+  if (!completedBill) return;
+
+  // STEP 1: Try Mobile Bluetooth First
+  if (Capacitor.isNativePlatform()) {
+     const success = await printViaBluetooth();
+     if (success) return; // If bluetooth worked, stop here.
+  }
+
+  // --- PREPARE HTML CONTENT (For Windows & Web) ---
+  const billId = completedBill.id ? String(completedBill.id) : 'N/A';
+  const billDate = new Date(completedBill.created_at).toLocaleDateString();
+  const isUdhaarBill = completedBill.payment_status === 'pending';
+
+  const printContent = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Bill #${billId}</title>
+      <style>
+        body { font-family: 'Courier New', monospace; margin: 0; padding: 5px; width: 300px; color: black; }
+        .center { text-align: center; }
+        .right { text-align: right; }
+        .bold { font-weight: bold; }
+        .divider { border-top: 1px dashed #000; margin: 5px 0; }
+        .table { width: 100%; font-size: 12px; border-collapse: collapse; }
+        .table td { vertical-align: top; }
+        .udhaar-badge { border: 1px solid #000; padding: 2px 4px; font-size: 10px; display: inline-block; margin-top: 5px; }
+      </style>
+    </head>
+    <body>
+      <div class="center">
+        <h2 style="margin:0; font-size: 18px;">SAKHI COLLECTIONS</h2>
+        <p style="margin:5px 0; font-size:12px;">Retail Invoice</p>
+        ${isUdhaarBill ? '<div class="udhaar-badge">UDHAAR / CREDIT</div>' : ''}
+      </div>
+      
+      <div class="divider"></div>
+      <div style="display:flex; justify-content:space-between; font-size:12px;">
+        <span>${billDate}</span><span>#${billId.slice(0, 8)}</span>
+      </div>
+      ${completedBill.customer_name ? `<div style="font-size:12px;">Cust: ${completedBill.customer_name}</div>` : ''}
+      
+      <div class="divider"></div>
+      <table class="table">
+        ${completedBill.items.map((item: any) => `
+          <tr><td colspan="2" style="padding-bottom: 2px;">${item.item_name}</td></tr>
+          <tr>
+            <td class="right" style="padding-bottom: 5px; color: #444;">${item.cartQuantity} x ${item.selling_price}</td>
+            <td class="right bold" style="padding-bottom: 5px;">= ${(item.selling_price * item.cartQuantity).toFixed(2)}</td>
+          </tr>
+        `).join('')}
+      </table>
+      
+      <div class="divider"></div>
+      <div style="display:flex; justify-content:space-between; font-weight:bold; font-size:16px;">
+        <span>TOTAL</span><span>Rs.${Math.abs(completedBill.final_amount).toFixed(2)}</span>
+      </div>
+      <div class="center" style="margin-top:20px; font-size:12px;">Thank You!<br>Visit Again</div>
+    </body>
+    </html>
+  `;
+
+  // STEP 2: CHECK FOR WINDOWS (ELECTRON)
+  // If running in Electron, use the silent print bridge
+  if ((window as any).electronAPI) {
+      const printerName = localStorage.getItem("windows_printer_name");
+      
+      if (!printerName) {
+         toast({ variant: "destructive", title: "No Printer", description: "Select a printer in Settings first." });
+         // Fallback to standard web print if no printer selected
+      } else {
+         toast({ title: "Printing..." });
+         try {
+            // Send to Electron Bridge
+            await (window as any).electronAPI.printComponent(printContent, printerName);
+            toast({ title: "Sent to Printer", className: "bg-green-600 text-white" });
+            return; // Stop here on success
+         } catch (e) {
+            console.error(e);
+            toast({ variant: "destructive", title: "Print Failed" });
+         }
+      }
+  }
+
+  // STEP 3: WEB FALLBACK (Standard Browser Print)
+  // Runs if: 1. Not Mobile, 2. Not Electron, OR 3. Electron failed
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) {
+    toast({ title: "Error", description: "Allow popups to print", variant: "destructive" });
+    return;
+  }
+
+  printWindow.document.write(printContent);
+  printWindow.document.close();
+
+  printWindow.onload = () => {
+      printWindow.print();
+      if (window.innerWidth < 768) {
+          setTimeout(() => printWindow.close(), 1000);
+      }
+  };
+};
   const shareOnWhatsApp = () => {
     if (!completedBill) return;
-    const items = completedBill.items
-      .map((item: CartItem) => `${item.item_name} x${item.cartQuantity} = ₹${item.selling_price * item.cartQuantity}`)
-      .join("\n");
 
+    // 1. HARDCODE YOUR VERCEL DOMAIN HERE
+    // DO NOT use window.location.origin for the share link
+    // Example: https://sakhi-billing.vercel.app (No trailing slash)
+    const PUBLIC_DOMAIN = "https://stock-buddy-drab.vercel.app"; 
+    
+    // 2. Create the Secure Link
+    // Now both Desktop and Mobile App will generate the correct web link
+    const invoiceLink = `${PUBLIC_DOMAIN}/invoice/${completedBill.share_id}`;
+
+    // 3. Format Date
+    const dateStr = new Date().toLocaleDateString('en-IN', {
+      day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+    });
+
+    const customerName = completedBill.customer_name || "Customer";
+
+    // 4. Message
     const message = encodeURIComponent(
-      `*Sakhi Collections Bill*\n${completedBill.payment_status === 'pending' ? '(UDHAAR/CREDIT)' : ''}\n\n${items}\n\nSubtotal: ₹${Math.abs(completedBill.total_amount)}\nDiscount: ₹${completedBill.discount_amount}\n*Total: ₹${Math.abs(completedBill.final_amount)}*`
+`Dear ${customerName},
+
+Thank you for shopping at SAKHI COLLECTIONS! 🛍️ 
+
+Your invoice is ready:
+💰 Amount: ₹${Math.abs(completedBill.final_amount)}
+📅 Date: ${dateStr}
+🔗 View Invoice: ${invoiceLink}
+
+Visit Again! ✨`
     );
 
-    window.open(`https://wa.me/?text=${message}`, "_blank");
+    // 5. Send
+    if (completedBill.customer_phone) {
+       window.open(`https://wa.me/91${completedBill.customer_phone}?text=${message}`, "_blank");
+    } else {
+       window.open(`https://wa.me/?text=${message}`, "_blank");
+    }
   };
 
   const startScanner = async () => {
@@ -501,7 +611,7 @@ const lastScannedRef = useRef<{ code: string; time: number }>({ code: "", time: 
 
         const config = { 
           fps: 10, 
-          qrbox: { width: 300, height: 150 },
+          qrbox: { width: 250, height: 100 }, // Shorter strip for barcodes
           formatsToSupport: [ 
             Html5QrcodeSupportedFormats.CODE_128,
             Html5QrcodeSupportedFormats.EAN_13,
@@ -667,376 +777,303 @@ const lastScannedRef = useRef<{ code: string; time: number }>({ code: "", time: 
 
   return (
     <AppLayout>
+      {/* Helper Modals */}
       <PackItemModal />
       <EditQuantityModal />
-      <div className="animate-fade-in">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
-          <div>
-            <h1 className="text-2xl font-bold text-foreground">
-              {isReturnMode ? "Process Returns" : "Billing"}
-            </h1>
-            <p className="text-muted-foreground">Scan items or enter codes manually</p>
-          </div>
-          <div className="flex items-center gap-3">
-            <Label htmlFor="return-mode" className="text-sm">
-              Return Mode
-            </Label>
-            <Switch
-              id="return-mode"
-              checked={isReturnMode}
-              onCheckedChange={(checked) => {
-                setIsReturnMode(checked);
-                setIsUdhaar(false); // Disable Udhaar on return
-                clearCart();
-              }}
-            />
-            {isReturnMode && <Badge variant="destructive">Returns</Badge>}
-          </div>
-        </div>
-
-        <div className="grid gap-6 lg:grid-cols-2">
-          {/* Scanner Section */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Camera className="h-5 w-5" />
-                Scan Items
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {/* Force a minimum height so the camera has space to render */}
-              <div 
-                id="qr-reader" 
-                className={`w-full bg-black rounded-lg overflow-hidden ${!isScanning ? "hidden" : "block"}`}
-                style={{ minHeight: "300px" }} 
-              />
-              
-              {!isScanning && (
-                <div className="w-full h-[300px] bg-muted rounded-lg flex items-center justify-center">
-                  <CameraOff className="h-12 w-12 text-muted-foreground" />
-                </div>
-              )}
-              <Button
-                onClick={isScanning ? stopScanner : startScanner}
-                className="w-full"
-                variant={isScanning ? "destructive" : "default"}
-              >
-                {isScanning ? (
-                  <>
-                    <CameraOff className="mr-2 h-4 w-4" /> Stop Scanner
-                  </>
-                ) : (
-                  <>
-                    <Camera className="mr-2 h-4 w-4" /> Start Scanner
-                  </>
-                )}
-              </Button>
-
-              <div className="flex gap-2 relative" ref={searchInputRef}>
-                <div className="relative flex-1">
-                  <Input
-                    placeholder="Search by item code or name"
-                    value={manualCode}
-                    onChange={handleManualCodeChange}
-                    onFocus={() => searchResults.length > 0 && setShowDropdown(true)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && manualCode) {
-                        addToCart(manualCode);
-                        setManualCode("");
-                        setSearchResults([]);
-                      }
-                    }}
-                    className="w-full"
-                  />
-                  {showDropdown && searchResults.length > 0 && (
-                    <div className="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-60 overflow-auto">
-                      {searchResults.map((item) => (
-                        <div
-                          key={item.id}
-                          className="px-4 py-2 hover:bg-gray-100 cursor-pointer flex justify-between items-center"
-                          onClick={() => handleSelectItem(item)}
-                        >
-                          <div>
-                            <div className="font-medium">{item.item_name}</div>
-                            <div className="text-xs text-gray-500">
-                              {item.item_code} {item.brand_name ? `• ${item.brand_name}` : ''}
-                            </div>
-                          </div>
-                          <div className="text-sm font-medium">
-                            ₹{item.selling_price}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <Button
-                  onClick={() => {
-                    if (manualCode) {
-                      addToCart(manualCode);
-                      setManualCode("");
-                      setSearchResults([]);
-                    }
-                  }}
-                  disabled={!manualCode}
-                >
-                  Add
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Cart Section */}
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle className="flex items-center gap-2">
-                <ShoppingCart className="h-5 w-5" />
-                {isReturnMode ? "Return Cart" : "Cart"} ({cart.length})
-              </CardTitle>
-              {cart.length > 0 && (
-                <Button variant="ghost" size="sm" onClick={clearCart}>
-                  <Trash2 className="h-4 w-4 mr-1" /> Clear
-                </Button>
-              )}
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {cart.length === 0 ? (
-                <p className="text-center text-muted-foreground py-8">
-                  No items in cart. Scan or add items.
-                </p>
-              ) : (
-                <div className="space-y-3 max-h-64 overflow-y-auto">
-                  {cart.map((item) => (
-                    <div
-                      key={item.id}
-                      className="flex items-center justify-between p-3 bg-muted/50 rounded-lg"
-                    >
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <p className="font-medium truncate">{item.item_name}</p>
-                          {item.size && item.size !== 'Free Size' && (
-                            <span className="text-xs bg-muted-foreground/10 text-muted-foreground px-2 py-0.5 rounded-full">
-                              {item.size}
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-sm text-muted-foreground">
-                          ₹{item.selling_price} × {item.cartQuantity}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          className="h-6 w-6"
-                          onClick={() => updateQuantity(item.id, -1)}
-                        >
-                          <Minus className="h-3 w-3" />
-                        </Button>
-                        <div 
-                          className="flex flex-col items-center cursor-pointer hover:bg-muted/50 rounded px-1"
-                          onClick={() => handleEditQuantity(item)}
-                        >
-                          <span className="w-6 text-center">
-                            {item.cartQuantity}
-                          </span>
-                        </div>
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          className="h-6 w-6"
-                          onClick={() => updateQuantity(item.id, 1)}
-                          disabled={!isReturnMode && item.cartQuantity >= item.quantity}
-                        >
-                          <Plus className="h-3 w-3" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-6 w-6 text-destructive"
-                          onClick={() => removeFromCart(item.id)}
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {!isReturnMode && cart.length > 0 && (
-                <div className="space-y-3 pt-4 border-t">
-                  {/* Discount Section */}
-                  <div className="flex items-center gap-2">
-                    <Label className="w-20">Discount</Label>
-                    <Button
-                      variant={discountType === "flat" ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => setDiscountType("flat")}
-                    >
-                      <DollarSign className="h-3 w-3" />
-                    </Button>
-                    <Button
-                      variant={discountType === "percent" ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => setDiscountType("percent")}
-                    >
-                      <Percent className="h-3 w-3" />
-                    </Button>
-                    <Input
-                      type="number"
-                      className="w-24"
-                      value={discountValue || ""}
-                      onChange={(e) => setDiscountValue(Number(e.target.value))}
-                      placeholder="0"
-                    />
-                  </div>
-
-                  {/* UDHAAR / PAYMENT MODE TOGGLE */}
-                  <div className="bg-muted/30 p-3 rounded-lg border">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <CreditCard className="h-4 w-4 text-muted-foreground" />
-                        <Label htmlFor="udhaar-mode" className="cursor-pointer font-medium">
-                          Udhaar (Pay Later)
-                        </Label>
-                      </div>
-                      <Switch
-                        id="udhaar-mode"
-                        checked={isUdhaar}
-                        onCheckedChange={setIsUdhaar}
-                      />
-                    </div>
-
-                    {/* DROPDOWN INPUTS FOR UDHAAR */}
-                    {isUdhaar ? (
-                      <div className="mt-3 space-y-3 animate-in slide-in-from-top-2">
-                        <div className="grid gap-2">
-                          <Label htmlFor="cust-name" className="text-xs">
-                            Customer Name <span className="text-red-500">*</span>
-                          </Label>
-                          <div className="relative">
-                            <User className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                            <Input
-                              id="cust-name"
-                              value={customerName}
-                              onChange={(e) => setCustomerName(e.target.value)}
-                              placeholder="Enter name"
-                              className="pl-9 bg-white"
-                            />
-                          </div>
-                        </div>
-                        <div className="grid gap-2">
-                          <Label htmlFor="cust-phone" className="text-xs">
-                            Phone Number <span className="text-red-500">*</span>
-                          </Label>
-                          <div className="relative">
-                            <Phone className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                            <Input
-                              id="cust-phone"
-                              value={customerPhone}
-                              onChange={(e) => setCustomerPhone(e.target.value)}
-                              placeholder="Enter phone"
-                              className="pl-9 bg-white"
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="mt-3">
-                         <div className="grid gap-2">
-                          <Label htmlFor="cust-phone-opt" className="text-xs text-muted-foreground">
-                            Customer Phone (Optional)
-                          </Label>
-                          <Input
-                            id="cust-phone-opt"
-                            value={customerPhone}
-                            onChange={(e) => setCustomerPhone(e.target.value)}
-                            placeholder="+91 XXXXXXXXXX"
-                            className="h-9"
-                          />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              <div className="pt-4 border-t space-y-2">
-                <div className="flex justify-between text-sm">
-                  <span>Subtotal</span>
-                  <span>₹{subtotal.toFixed(2)}</span>
-                </div>
-                {discountAmount > 0 && !isReturnMode && (
-                  <div className="flex justify-between text-sm text-success">
-                    <span>Discount</span>
-                    <span>-₹{discountAmount.toFixed(2)}</span>
-                  </div>
-                )}
-                <div className="flex justify-between text-lg font-bold">
-                  <span>{isReturnMode ? "Refund Total" : "Total"}</span>
-                  <span className={isReturnMode ? "text-destructive" : "text-primary"}>
-                    ₹{finalTotal.toFixed(2)}
-                  </span>
-                </div>
-              </div>
-
-              <Button
-                className={`w-full ${isUdhaar ? 'bg-orange-600 hover:bg-orange-700' : ''}`}
-                size="lg"
-                onClick={completeSale}
-                disabled={cart.length === 0 || isProcessing}
-              >
-                {isProcessing ? (
-                  "Processing..."
-                ) : isReturnMode ? (
-                  <>
-                    <RotateCcw className="mr-2 h-4 w-4" /> Process Return
-                  </>
-                ) : isUdhaar ? (
-                  <>
-                     Complete Udhaar Sale
-                  </>
-                ) : (
-                  "Complete Sale"
-                )}
-              </Button>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-
-      {/* Success Modal */}
       <Dialog open={showSuccessModal} onOpenChange={setShowSuccessModal}>
-        <DialogContent>
+        <DialogContent className="w-[90%] max-w-md rounded-xl">
           <DialogHeader>
-            <DialogTitle className="text-center">
-              {isReturnMode ? "Return Processed!" : completedBill?.payment_status === 'pending' ? "Udhaar Recorded!" : "Sale Complete!"}
-            </DialogTitle>
+            <DialogTitle className="text-center">{isReturnMode ? "Refund Processed" : "Sale Complete"}</DialogTitle>
           </DialogHeader>
-          <div className="text-center space-y-4">
-            <div className={`text-4xl font-bold ${completedBill?.payment_status === 'pending' ? 'text-orange-600' : 'text-primary'}`}>
-              ₹{completedBill ? Math.abs(completedBill.final_amount).toFixed(2) : "0.00"}
+          <div className="text-center py-4 space-y-4">
+            <div className={`text-5xl font-black ${completedBill?.payment_status === 'pending' ? 'text-orange-600' : 'text-primary'}`}>
+              ₹{completedBill ? Math.abs(completedBill.final_amount).toFixed(0) : "0"}
             </div>
+            
             {completedBill?.payment_status === 'pending' && (
-              <div className="bg-orange-100 text-orange-800 px-3 py-1 rounded-full text-sm inline-block font-medium">
-                Payment Pending
-              </div>
+              <Badge variant="outline" className="text-orange-600 border-orange-200 justify-center w-full">Pending Payment</Badge>
             )}
-            <div className="flex gap-3 justify-center">
-              <Button onClick={printBill}>
-                <Printer className="mr-2 h-4 w-4" /> Print Bill
+
+            <div className="grid grid-cols-2 gap-3 pt-2">
+              <Button variant="outline" onClick={printBill} className="flex gap-2">
+                <Printer className="h-4 w-4"/> Print
               </Button>
-              <Button variant="outline" onClick={shareOnWhatsApp}>
-                <MessageCircle className="mr-2 h-4 w-4" /> WhatsApp
+              <Button variant="outline" onClick={shareOnWhatsApp} className="flex gap-2">
+                <MessageCircle className="h-4 w-4"/> Share
               </Button>
             </div>
-            <Button variant="ghost" onClick={() => setShowSuccessModal(false)} className="w-full">
-              Done
+            <Button className="w-full h-12 text-lg" onClick={() => setShowSuccessModal(false)}>
+              Start New Sale
             </Button>
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* MAIN CONTAINER 
+         h-[100dvh] fixes the mobile browser address bar scroll issue.
+         flex-col for mobile, lg:flex-row for desktop split view
+      */}
+      <div className="flex flex-col lg:flex-row h-[calc(100dvh-4rem)] lg:h-[calc(100vh-4rem)] -m-4 sm:m-0 bg-background overflow-hidden relative">
+        
+        {/* --- LEFT COLUMN: SEARCH & CART LIST --- */}
+        <div className="flex-1 flex flex-col h-full overflow-hidden relative">
+          
+          {/* Header & Search */}
+          <div className="bg-card border-b shadow-sm z-20 shrink-0 p-3 space-y-3">
+            {/* Top Row: Title, Mode, Scan Toggle */}
+            <div className="flex items-center justify-between">
+               <div className="flex items-center gap-3">
+      <Button 
+        variant="ghost" 
+        size="icon" 
+        className="-ml-2 h-9 w-9 text-muted-foreground" 
+        onClick={() => navigate("/")} // Goes back to Dashboard
+      >
+        <ArrowLeft className="h-5 w-5" />
+      </Button>
+                  <div className="flex items-center gap-2 bg-muted rounded-full px-2 py-1">
+                    <span className={`text-[10px] uppercase font-bold ${!isReturnMode ? 'text-primary' : 'text-muted-foreground'}`}>Sale</span>
+                    <Switch 
+                      checked={isReturnMode} 
+                      onCheckedChange={(c) => { setIsReturnMode(c); setIsUdhaar(false); clearCart(); }} 
+                      className="scale-75" 
+                    />
+                    <span className={`text-[10px] uppercase font-bold ${isReturnMode ? 'text-destructive' : 'text-muted-foreground'}`}>Ret</span>
+                  </div>
+                  
+               </div>
+
+               <div className="flex gap-2">
+                 {cart.length > 0 && (
+                    <Button variant="ghost" size="icon" className="h-9 w-9 text-destructive bg-destructive/10 hover:bg-destructive/20" onClick={clearCart}>
+                      <Trash2 className="h-4 w-4"/>
+                    </Button>
+                  )}
+                  <Button 
+                    variant={isScanning ? "destructive" : "default"} 
+                    size="sm"
+                    onClick={isScanning ? stopScanner : startScanner}
+                    className="h-9 px-4 shadow-sm"
+                  >
+                    {isScanning ? <CameraOff className="mr-2 h-4 w-4"/> : <Camera className="mr-2 h-4 w-4"/>}
+                    {isScanning ? "Stop" : "Scan"}
+                  </Button>
+               </div>
+            </div>
+
+            {/* Scanner Viewport (Animated) */}
+            <div className={`relative bg-black rounded-lg overflow-hidden transition-all duration-300 ease-in-out ${isScanning ? 'h-[200px] mb-2' : 'h-0'}`}>
+              <div id="qr-reader" className="w-full h-full" />
+              {isScanning && (
+                <Button variant="ghost" size="icon" className="absolute top-2 right-2 text-white h-8 w-8 bg-black/50 rounded-full z-30" onClick={stopScanner}>
+                  <X className="h-4 w-4"/>
+                </Button>
+              )}
+            </div>
+
+            {/* Search Bar */}
+            <div className="relative" ref={searchInputRef}>
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                  <Input 
+                    placeholder="Search Item Code or Name..." 
+                    value={manualCode}
+                    onChange={handleManualCodeChange}
+                    onFocus={() => searchResults.length > 0 && setShowDropdown(true)}
+                    onKeyDown={(e) => e.key === "Enter" && manualCode && (addToCart(manualCode), setManualCode(""))}
+                    className="pl-9 h-10 text-base" // Larger text for mobile inputs
+                  />
+                </div>
+                <Button size="icon" className="h-10 w-10 shrink-0" onClick={() => manualCode && (addToCart(manualCode), setManualCode(""))} disabled={!manualCode}>
+                  <Plus className="h-5 w-5" />
+                </Button>
+              </div>
+              
+              {/* Dropdown Results */}
+              {showDropdown && searchResults.length > 0 && (
+                <div className="absolute top-full left-0 right-0 mt-1 bg-popover border rounded-lg shadow-2xl z-50 max-h-[40vh] overflow-y-auto">
+                  {searchResults.map((item) => (
+                    <div key={item.id} className="p-3 border-b last:border-0 hover:bg-accent active:bg-accent/80 cursor-pointer flex justify-between items-center"
+                      onClick={() => { setManualCode(item.item_code); addToCart(item.item_code); setShowDropdown(false); }}>
+                      <div>
+                        <div className="font-medium text-base">{item.item_name}</div>
+                        <div className="text-xs text-muted-foreground">{item.item_code}</div>
+                      </div>
+                      <div className="font-bold text-primary">₹{item.selling_price}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Cart List */}
+          {/* pb-48 ensures the last item scrolls ABOVE the fixed footer on mobile */}
+          <div className="flex-1 overflow-y-auto p-3 space-y-3 bg-muted/20 pb-48 lg:pb-4">
+             {cart.length === 0 ? (
+                <div className="h-[50vh] flex flex-col items-center justify-center text-muted-foreground/40">
+                  <div className="bg-muted/30 p-6 rounded-full mb-4">
+                    <ShoppingCart className="h-10 w-10" />
+                  </div>
+                  <p className="font-medium">Cart is empty</p>
+                  <p className="text-xs mt-1">Scan items to start billing</p>
+                </div>
+             ) : (
+               cart.map((item) => (
+                 <Card key={item.id} className="border-0 shadow-sm ring-1 ring-border/50">
+                    <CardContent className="p-3 flex items-center justify-between gap-3">
+                       <div className="flex-1 min-w-0">
+                          <h3 className="font-semibold text-sm truncate">{item.item_name}</h3>
+                          <div className="flex items-center gap-2 mt-1">
+                             <Badge variant="secondary" className="font-normal text-[10px] h-5 px-1">{item.size || 'STD'}</Badge>
+                             <span className="text-xs text-muted-foreground">₹{item.selling_price} / unit</span>
+                          </div>
+                       </div>
+                       
+                       <div className="flex flex-col items-end gap-1">
+                          <div className="flex items-center bg-secondary rounded-lg p-0.5">
+                             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => updateQuantity(item.id, -1)}>
+                               <Minus className="h-3 w-3" />
+                             </Button>
+                             <div 
+                               className="w-8 text-center font-bold text-sm cursor-pointer border-b border-dashed border-primary/50"
+                               onClick={() => setEditQuantityModal({ open: true, item, newQuantity: String(item.cartQuantity) })}
+                             >
+                               {item.cartQuantity}
+                             </div>
+                             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => updateQuantity(item.id, 1)}>
+                               <Plus className="h-3 w-3" />
+                             </Button>
+                          </div>
+                          <div className="font-bold text-base">₹{(item.selling_price * item.cartQuantity).toFixed(0)}</div>
+                       </div>
+                    </CardContent>
+                 </Card>
+               ))
+             )}
+          </div>
+        </div>
+
+        {/* --- RIGHT COLUMN / BOTTOM SHEET: PAYMENTS --- */}
+        {/* On Mobile: Fixed to bottom. On Desktop: Static right column */}
+        <div className={`
+            bg-background border-t lg:border-t-0 lg:border-l shadow-[0_-4px_20px_rgba(0,0,0,0.1)] 
+            z-30 shrink-0 
+            fixed bottom-0 left-0 right-0 
+            lg:relative lg:w-[380px] lg:flex lg:flex-col lg:justify-end
+        `}>
+           
+           {/* Collapsible/Expandable Options Area */}
+           <div className="px-4 pt-3 pb-2 space-y-3">
+              
+              {/* Row 1: Quick Toggles (Discount & Udhaar) */}
+              {cart.length > 0 && (
+                <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
+                    {/* Discount Control */}
+                    {/* Discount Control - REPLACED */}
+                    <div className="flex items-center gap-2 bg-secondary/40 rounded-lg p-2 border flex-1 min-w-[140px]">
+                    <div className="flex flex-col items-start justify-center px-1">
+                      <span className="text-[10px] text-muted-foreground font-semibold uppercase">
+                        Final Bill Amt
+                      </span>
+                      {discountAmount > 0 && (
+                        <span className="text-[10px] text-green-600 font-bold">
+                          ({calculatedDiscountPercent}% Off)
+                        </span>
+                      )}
+                    </div>
+                    <Input 
+                        type="number" 
+                        className="h-8 border-0 bg-white shadow-sm text-right pl-6 pr-2 focus-visible:ring-0 font-bold text-lg"
+                        placeholder=""  // REMOVED the placeholder so it doesn't confuse the user
+                        value={manualFinalAmount}
+                        onChange={e => setManualFinalAmount(e.target.value)}
+                        onFocus={(e) => {
+                        // If the box is empty, fill it with the current subtotal instantly
+                        // This makes the number "real" so Backspace works
+                        if (!manualFinalAmount) {
+                            setManualFinalAmount(subtotal.toString());
+                        }
+                        // Select the text after a tiny delay so the new value is highlighted
+                        setTimeout(() => e.target.select(), 10);
+                    }}
+                />
+                    </div>
+
+                    {/* Udhaar Toggle */}
+                    <div 
+                      className={`flex items-center gap-2 px-3 rounded-lg border cursor-pointer transition-colors ${isUdhaar ? 'bg-orange-50 border-orange-200' : 'bg-secondary/40 border-transparent'}`}
+                      onClick={() => setIsUdhaar(!isUdhaar)}
+                    >
+                      <span className={`text-sm font-bold ${isUdhaar ? 'text-orange-700' : 'text-muted-foreground'}`}>Credit</span>
+                      <Switch checked={isUdhaar} onCheckedChange={setIsUdhaar} className="scale-75 data-[state=checked]:bg-orange-600" />
+                    </div>
+                </div>
+              )}
+
+              {/* Row 2: Customer Details (Always Visible now) */}
+<div className={`
+  p-2 rounded-lg border space-y-2 transition-colors duration-200
+  ${isUdhaar ? 'bg-orange-50 border-orange-200' : 'bg-white border-transparent'}
+`}>
+  <div className="flex gap-2">
+    {/* Customer Name Input */}
+    <div className="relative flex-1">
+      <User className={`absolute left-2.5 top-2.5 h-3.5 w-3.5 ${isUdhaar ? 'text-orange-400' : 'text-muted-foreground'}`}/>
+      <Input 
+        placeholder={isUdhaar ? "Customer Name (Required)" : "Customer Name (Optional)"}
+        className={`pl-8 h-9 text-sm focus-visible:ring-1 ${isUdhaar ? 'border-orange-200 focus-visible:ring-orange-300' : ''}`} 
+        value={customerName} 
+        onChange={e => setCustomerName(e.target.value)} 
+      />
+    </div>
+
+    {/* Phone Input */}
+    <div className="relative w-[140px]">
+      <Phone className={`absolute left-2.5 top-2.5 h-3.5 w-3.5 ${isUdhaar ? 'text-orange-400' : 'text-muted-foreground'}`}/>
+      <Input 
+        type="tel"
+        placeholder="Mobile No." 
+        className={`pl-8 h-9 text-sm focus-visible:ring-1 ${isUdhaar ? 'border-orange-200 focus-visible:ring-orange-300' : ''}`} 
+        value={customerPhone} 
+        onChange={e => setCustomerPhone(e.target.value)} 
+      />
+    </div>
+  </div>
+</div>
+           </div>
+
+           {/* MAIN PAYMENT BAR (Bottom) */}
+           {/* pb-safe handles iPhone Home Bar. lg:pb-4 handles desktop padding */}
+           <div className="bg-card p-4 pt-2 border-t flex items-center gap-3 pb-safe lg:pb-6">
+              <div className="flex-1">
+                 <div className="flex items-center justify-between">
+                    <span className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Total</span>
+                    {discountAmount > 0 && <span className="text-[10px] bg-green-100 text-green-700 px-1.5 rounded-sm font-bold">-{Math.round(discountAmount)}</span>}
+                 </div>
+                 <div className={`text-3xl font-black leading-tight tracking-tight ${isReturnMode ? 'text-destructive' : 'text-primary'}`}>
+                    ₹{finalTotal.toFixed(0)}
+                 </div>
+              </div>
+
+              <Button 
+                size="lg" 
+                className={`
+                  h-14 px-8 text-lg font-bold rounded-xl shadow-xl transition-all active:scale-95
+                  ${isUdhaar ? 'bg-orange-600 hover:bg-orange-700 text-white' : 'bg-primary hover:bg-primary/90'}
+                  ${isReturnMode ? 'bg-destructive hover:bg-destructive/90' : ''}
+                `}
+                disabled={cart.length === 0 || isProcessing}
+                onClick={completeSale}
+              >
+                 <span className="mr-2">{isProcessing ? "Processing..." : isReturnMode ? "REFUND" : isUdhaar ? "CREDIT" : "PAY"}</span>
+                 {!isProcessing && <CreditCard className="h-5 w-5 opacity-80" />}
+              </Button>
+           </div>
+        </div>
+
+      </div>
     </AppLayout>
   );
 }

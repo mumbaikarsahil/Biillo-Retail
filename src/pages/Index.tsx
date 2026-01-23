@@ -1,100 +1,150 @@
 import { AppLayout } from "@/components/layout/AppLayout";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Package, Receipt, BarChart3, Plus, QrCode } from "lucide-react";
+import { Card, CardContent } from "@/components/ui/card";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Link } from "react-router-dom";
 import { isSupabaseConfigured } from "@/lib/supabase";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { 
+  LayoutDashboard, 
+  PlusCircle, 
+  ShoppingCart, 
+  BarChart3, 
+  Boxes, 
+  BookUser, 
+  Settings, 
+  TrendingUp,
+  AlertCircle
+} from "lucide-react";
 
 const Index = () => {
+  
+  // Define all menu options in one array for cleaner rendering
+  const menuOptions = [
+    { 
+      href: "/billing", 
+      label: "Start Billing", 
+      icon: ShoppingCart, 
+      color: "text-primary",
+      bg: "bg-primary/10",
+      description: "New Sale"
+    },
+    { 
+      href: "/inventory/add", 
+      label: "Add Stock", 
+      icon: PlusCircle, 
+      color: "text-green-600",
+      bg: "bg-green-100 dark:bg-green-900/20",
+      description: "New Items" 
+    },
+    { 
+      href: "/udhaar", 
+      label: "Udhaar", 
+      icon: BookUser, 
+      color: "text-orange-600",
+      bg: "bg-orange-100 dark:bg-orange-900/20",
+      description: "Credit Book"
+    },
+    { 
+      href: "/sales", 
+      label: "Sales History", 
+      icon: TrendingUp, 
+      color: "text-blue-600",
+      bg: "bg-blue-100 dark:bg-blue-900/20",
+      description: "Transactions"
+    },
+    { 
+      href: "/manage", 
+      label: "Manage Stock", 
+      icon: Boxes, 
+      color: "text-purple-600",
+      bg: "bg-purple-100 dark:bg-purple-900/20",
+      description: "Edit Items"
+    },
+    { 
+      href: "/analytics", 
+      label: "Analytics", 
+      icon: BarChart3, 
+      color: "text-pink-600",
+      bg: "bg-pink-100 dark:bg-pink-900/20",
+      description: "Reports"
+    },
+    { 
+      href: "/settings", 
+      label: "Settings", 
+      icon: Settings, 
+      color: "text-slate-600",
+      bg: "bg-slate-100 dark:bg-slate-800",
+      description: "App Config"
+    },
+    { 
+      href: "/", 
+      label: "Dashboard", 
+      icon: LayoutDashboard, 
+      color: "text-slate-600",
+      bg: "bg-slate-100 dark:bg-slate-800",
+      description: "Overview"
+    },
+  ];
+
   return (
     <AppLayout>
-      <div className="space-y-8">
-        {/* Header */}
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight text-foreground">Dashboard</h1>
-          <p className="text-muted-foreground mt-1">Welcome to your retail inventory management system</p>
+      <div className="space-y-6 pb-20"> {/* pb-20 adds space at bottom for scrolling */}
+        
+        {/* Compact Header */}
+        <div className="flex flex-col space-y-1">
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">Dashboard</h1>
+          <p className="text-sm text-muted-foreground">Quick access to store operations</p>
         </div>
 
-        {/* Connection Status */}
+        {/* Connection Status - Compact */}
         {!isSupabaseConfigured && (
-          <Alert variant="destructive">
-            <AlertTitle>Database not connected</AlertTitle>
-            <AlertDescription>
-              Please configure your Supabase credentials in project secrets to enable full functionality.
+          <Alert variant="destructive" className="py-2">
+            <AlertCircle className="h-4 w-4" />
+            <AlertTitle className="text-sm font-semibold ml-2">DB Disconnected</AlertTitle>
+            <AlertDescription className="text-xs ml-2">
+              Configure Supabase secrets.
             </AlertDescription>
           </Alert>
         )}
 
-        {/* Quick Actions */}
-        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-          <Card className="hover:shadow-lg transition-shadow border-border/50 bg-card">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-lg font-semibold">Add Inventory</CardTitle>
-              <Package className="h-5 w-5 text-primary" />
-            </CardHeader>
-            <CardContent>
-              <CardDescription className="mb-4">
-                Register new items, generate QR codes, and manage your stock levels
-              </CardDescription>
-              <Button asChild className="w-full">
-                <Link to="/inventory/add">
-                  <Plus className="mr-2 h-4 w-4" />
-                  Add New Item
-                </Link>
-              </Button>
-            </CardContent>
-          </Card>
+        {/* MOBILE OPTIMIZED GRID */}
+        {/* grid-cols-2 makes it 2 items per row on mobile (easy to reach) */}
+        {/* md:grid-cols-4 makes it 4 items per row on desktop */}
+        <div className="grid grid-cols-2 gap-3 md:gap-4 md:grid-cols-4">
+          {menuOptions.map((option, index) => (
+            <Link key={index} to={option.href}>
+              <Card className="h-full hover:shadow-md transition-all border-muted active:scale-95">
+                <CardContent className="flex flex-col items-center justify-center p-4 text-center space-y-3 h-full">
+                  
+                  {/* Icon Circle */}
+                  <div className={`p-3 rounded-full ${option.bg}`}>
+                    <option.icon className={`h-6 w-6 ${option.color}`} />
+                  </div>
+                  
+                  {/* Labels */}
+                  <div>
+                    <h3 className="font-semibold text-sm md:text-base leading-none">
+                      {option.label}
+                    </h3>
+                    <p className="text-[10px] md:text-xs text-muted-foreground mt-1">
+                      {option.description}
+                    </p>
+                  </div>
 
-          <Card className="hover:shadow-lg transition-shadow border-border/50 bg-card">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-lg font-semibold">Billing</CardTitle>
-              <Receipt className="h-5 w-5 text-primary" />
-            </CardHeader>
-            <CardContent>
-              <CardDescription className="mb-4">
-                Scan items, process sales, apply discounts, and handle returns
-              </CardDescription>
-              <Button asChild variant="secondary" className="w-full">
-                <Link to="/billing">
-                  <QrCode className="mr-2 h-4 w-4" />
-                  Start Billing
-                </Link>
-              </Button>
-            </CardContent>
-          </Card>
-
-          <Card className="hover:shadow-lg transition-shadow border-border/50 bg-card">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-lg font-semibold">Analytics</CardTitle>
-              <BarChart3 className="h-5 w-5 text-primary" />
-            </CardHeader>
-            <CardContent>
-              <CardDescription className="mb-4">
-                View sales reports, track trends, and export inventory data
-              </CardDescription>
-              <Button asChild variant="outline" className="w-full">
-                <Link to="/analytics">
-                  <BarChart3 className="mr-2 h-4 w-4" />
-                  View Reports
-                </Link>
-              </Button>
-            </CardContent>
-          </Card>
+                </CardContent>
+              </Card>
+            </Link>
+          ))}
         </div>
 
-        {/* Info Section */}
-        <Card className="bg-muted/30 border-border/50">
-          <CardHeader>
-            <CardTitle className="text-lg">Getting Started</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2 text-sm text-muted-foreground">
-            <p>• <strong>Add Inventory:</strong> Register products with name, price, quantity, and auto-generated QR codes</p>
-            <p>• <strong>Billing:</strong> Scan QR codes to add items to cart, apply discounts, and complete sales</p>
-            <p>• <strong>Analytics:</strong> Track daily/monthly sales and export inventory to Excel</p>
-            <p>• <strong>Returns:</strong> Use return mode in billing to process product returns</p>
-          </CardContent>
-        </Card>
+        {/* Info Section - Collapsed/Compact for Mobile */}
+        <div className="bg-muted/20 rounded-lg p-4 border border-dashed text-xs text-muted-foreground">
+          <p className="font-medium text-foreground mb-2">Did you know?</p>
+          <ul className="list-disc list-inside space-y-1">
+             <li>Tap <strong>Billing</strong> to start a new sale instantly.</li>
+             <li>Use <strong>Udhaar</strong> to track customer credits.</li>
+             <li>Check <strong>Analytics</strong> for daily sales reports.</li>
+          </ul>
+        </div>
       </div>
     </AppLayout>
   );

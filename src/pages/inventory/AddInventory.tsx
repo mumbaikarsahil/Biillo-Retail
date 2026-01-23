@@ -12,46 +12,38 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { useToast } from "@/hooks/use-toast";
 import { supabase, Item } from "@/lib/supabase";
 import { Printer, Plus, RotateCcw } from "lucide-react";
+import { Capacitor } from "@capacitor/core";
+import { BluetoothSerial } from "@awesome-cordova-plugins/bluetooth-serial";
+import { Toast } from '@capacitor/toast';
 
-// --- UPDATED SCHEMA & VALIDATION ---
+// --- UPDATED SCHEMA (Keep exactly as you had it) ---
 const formSchema = z.object({
   item_name: z.string().min(1, "Item name is required"),
   make: z.string().min(1, "Make is required"),
   brand_name: z.string().min(1, "Brand name is required"),
   size: z.string().default('M'),
-  purchase_price: z.coerce.number().min(0, "Must be positive"), // Changed to min(0) to allow initial 0 state
-  selling_price: z.coerce.number().min(0, "Must be positive"),  // Changed to min(0)
+  purchase_price: z.coerce.number().min(0, "Must be positive"),
+  selling_price: z.coerce.number().min(0, "Must be positive"),
   is_pack: z.boolean().default(false),
-  
-  // FIX: Allow 0 here so hidden fields don't block submission. We check >0 in refine below.
   price_per_piece: z.coerce.number().min(0).optional(), 
-  
   supplier_code: z.string().min(1, "Supplier code is required"),
   pieces_per_box: z.coerce.number().int().min(1, "Must be at least 1").default(1).optional(),
   number_of_boxes: z.coerce.number().int().min(0, "Cannot be negative").default(0).optional(),
   quantity: z.coerce.number().int().min(0, "Cannot be negative").default(0),
 }).refine(data => {
-  // Validate Prices are actually positive when submitting
-  if (data.purchase_price <= 0 || data.selling_price <= 0) {
-      return false;
-  }
+  if (data.purchase_price <= 0 || data.selling_price <= 0) return false;
   return true;
 }, {
   message: "Prices must be greater than 0",
-  path: ["selling_price"], // Point error to selling price
+  path: ["selling_price"],
 }).refine(data => {
-  if (data.is_pack) {
-    return (data.number_of_boxes || 0) > 0 || data.quantity > 0;
-  }
+  if (data.is_pack) return (data.number_of_boxes || 0) > 0 || data.quantity > 0;
   return data.quantity > 0;
 }, {
   message: "Quantity must be greater than 0",
   path: ["quantity"],
 }).refine(data => {
-  // FIX: Explicitly check for > 0 here only if pack mode is enabled
-  if (data.is_pack && (data.pieces_per_box || 0) > 1) {
-    return (data.price_per_piece || 0) > 0;
-  }
+  if (data.is_pack && (data.pieces_per_box || 0) > 1) return (data.price_per_piece || 0) > 0;
   return true;
 }, {
   message: "Price per piece is required and must be > 0",
@@ -113,7 +105,6 @@ export default function AddInventory() {
   const handleClearForm = () => {
     setFormData({});
     setSavedItem(null);
-    // This reset logic is now safe because Schema allows 0 values
     reset({
       item_name: '',
       make: '',
@@ -185,10 +176,132 @@ export default function AddInventory() {
     }
   };
 
-  const handlePrint = () => {
-    window.print();
+  // --- NEW: BLUETOOTH PRINT FUNCTION ---
+  // --- HELPER: MOBILE BLUETOOTH PRINT ---
+  const printLabelBluetooth = async (item: any) => {
+    const printerMac = localStorage.getItem("printer_mac");
+    if (!printerMac) {
+      toast({ variant: "destructive", title: "No Printer", description: "Set Default Printer in Settings." });
+      return false;
+    }
+
+    try {
+      const isConnected = await BluetoothSerial.isConnected().catch(() => false);
+      if (!isConnected) {
+        await new Promise((resolve, reject) => {
+          BluetoothSerial.connect(printerMac).subscribe(resolve, reject);
+        });
+      }
+
+      // 1. Prepare Command for A SINGLE LABEL
+      let labelCmd = "";
+      labelCmd += "\x1B\x40";       // Init
+      labelCmd += "\x1B\x61\x01";   // Center Align
+      
+      // Text
+      labelCmd += "\x1B\x45\x01";   // Bold ON
+      labelCmd += `${(item.item_name || "Item").substring(0, 25)}\n`;
+      labelCmd += "\x1B\x45\x00";   // Bold OFF
+      labelCmd += `${item.make || ''} - ${item.brand_name || ''}\n`;
+      labelCmd += `Size: ${item.size || 'STD'}\n`;
+
+      // Barcode
+      if (item.item_code) {
+         labelCmd += `\x1D\x68\x32`; // Height
+         labelCmd += `\x1D\x77\x02`; // Width
+         labelCmd += `\x1D\x6B\x49${String.fromCharCode(item.item_code.length)}${item.item_code}`;
+         labelCmd += `\n${item.item_code}\n`;
+      }
+
+      // Price & Footer
+      labelCmd += "\x1B\x45\x01";
+      labelCmd += `Rs. ${item.selling_price}/-\n`;
+      labelCmd += "\x1B\x45\x00";
+      labelCmd += "\n\n\n"; // Gap
+
+      // 2. Loop and Print (Quantity Times)
+      // We print in batches to avoid buffer overflow
+      const qty = item.quantity || 1;
+      toast({ title: "Printing...", description: `${qty} Labels` });
+      
+      for (let i = 0; i < qty; i++) {
+        await BluetoothSerial.write(labelCmd);
+        // Small delay every 5 labels to let printer catch up
+        if (i > 0 && i % 5 === 0) await new Promise(r => setTimeout(r, 500));
+      }
+
+      return true;
+
+    } catch (error) {
+      console.error("Print Error", error);
+      toast({ variant: "destructive", title: "Print Failed", description: "Check connection" });
+      return false;
+    }
   };
 
+  /// --- MAIN HANDLER: UNIVERSAL PRINT ---
+  const handlePrint = async () => {
+    if (!savedItem) return;
+
+    // STRATEGY 1: MOBILE APP (Bluetooth)
+    if (Capacitor.isNativePlatform()) {
+      await printLabelBluetooth(savedItem);
+      return;
+    }
+
+    // STRATEGY 2: WINDOWS (Electron Silent Print)
+    if ((window as any).electronAPI) {
+      const printerName = localStorage.getItem("windows_printer_name");
+      if (!printerName) {
+        toast({ variant: "destructive", title: "No Printer", description: "Select printer in Settings first." });
+        return;
+      }
+
+      // Grab the HTML generated by your existing logic below!
+      const labelContent = document.getElementById("printable-labels");
+      if (!labelContent) return;
+
+      const fullHtml = `
+        <html>
+          <head>
+            <style>
+              body { margin: 0; padding: 0; background-color: white; }
+              @page { size: auto; margin: 2mm; }
+              /* Force Grid to be responsive for Thermal vs A4 */
+              .label-grid {
+                 display: grid;
+                 /* If paper is narrow (58mm), fits 1. If A4, fits 3. */
+                 grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); 
+                 gap: 2mm;
+              }
+              /* Reuse your existing card styles here */
+              .label-card {
+                 border: 1px solid black;
+                 text-align: center;
+                 padding: 4px;
+                 page-break-inside: avoid; /* Don't cut label in half */
+              }
+            </style>
+          </head>
+          <body>
+            ${labelContent.innerHTML}
+          </body>
+        </html>
+      `;
+
+      toast({ title: "Printing Labels..." });
+      try {
+        await (window as any).electronAPI.printComponent(fullHtml, printerName);
+        toast({ title: "Sent to Printer" });
+      } catch(e) {
+        toast({ variant: "destructive", title: "Print Failed" });
+      }
+      return;
+    }
+
+    // STRATEGY 3: WEB FALLBACK
+    window.print();
+  };
   return (
     <AppLayout>
       <div className="max-w-4xl mx-auto space-y-6 animate-fade-in print:hidden">
@@ -249,9 +362,9 @@ export default function AddInventory() {
                 </div>
 
                 <div className="space-y-2">
-                   <Label htmlFor="selling_price">Selling Price (₹)</Label>
-                   <Input id="selling_price" type="number" step="0.01" {...register("selling_price")} />
-                   {errors.selling_price && <p className="text-sm text-destructive">{errors.selling_price.message}</p>}
+                    <Label htmlFor="selling_price">Selling Price (₹)</Label>
+                    <Input id="selling_price" type="number" step="0.01" {...register("selling_price")} />
+                    {errors.selling_price && <p className="text-sm text-destructive">{errors.selling_price.message}</p>}
                 </div>
 
                 {/* Pack Logic Section */}
@@ -267,7 +380,7 @@ export default function AddInventory() {
                            setValue('pieces_per_box', 1);
                            setValue('number_of_boxes', 0);
                            setValue('quantity', 1);
-                           setValue('price_per_piece', 0); // Safe to set to 0 now
+                           setValue('price_per_piece', 0); 
                         } else {
                            setValue('number_of_boxes', 1);
                         }
@@ -316,7 +429,7 @@ export default function AddInventory() {
             </CardContent>
           </Card>
 
-          {/* --- RIGHT SIDE: PREVIEW SECTION --- */}
+          {/* --- RIGHT SIDE: PREVIEW SECTION (WEB VIEW) --- */}
           {savedItem && (
             <Card className="animate-fade-in border-green-200 bg-green-50/20">
               <CardHeader>
@@ -329,9 +442,14 @@ export default function AddInventory() {
                 
                 {/* Single Label Preview */}
                 <div className="flex justify-center">
-                   <div className="border border-gray-300 bg-white p-2 w-[220px] shadow-sm flex flex-col items-center text-center">
-                      <div className="font-bold text-sm">प्रगती'ज सखी कलेक्शन</div>
-                      <div className="text-[10px] text-gray-600">साई भवन, शहापूर</div>
+                    <div className="border border-gray-300 bg-white p-2 w-[220px] shadow-sm flex flex-col items-center text-center">
+                      <div className="font-bold text-sm">SAKHI COLLECTIONS</div>
+                      <div className="text-[10px] font-bold text-gray-800 uppercase mt-1">
+                        {savedItem.item_name}
+                      </div>
+                      <div className="text-[10px] text-gray-600">
+                         {savedItem.make} - {savedItem.brand_name} ({savedItem.size})
+                      </div>
                       
                       <div className="my-1 font-bold text-xl">₹{savedItem.selling_price}</div>
                       
@@ -343,11 +461,7 @@ export default function AddInventory() {
                         displayValue={true}
                         margin={0}
                       />
-                      
-                      <div className="mt-1 text-[8px] leading-tight text-gray-500 w-full px-1">
-                        सूचना:- सिल्क, जरी & फॅन्सी साड्या ड्रायकलिन कराव्यात. त्यांची कुठलीही गॅरंटी नाही.
-                      </div>
-                   </div>
+                    </div>
                 </div>
 
                 <div className="text-center">
@@ -365,30 +479,38 @@ export default function AddInventory() {
         </div>
       </div>
 
-      {/* --- HIDDEN PRINT AREA --- */}
+      {/* --- HIDDEN PRINT AREA (WEB & WINDOWS) --- */}
       {savedItem && (
         <div id="printable-labels" className="hidden print:block">
           <style type="text/css" media="print">
             {`
               body * { visibility: hidden; }
               #printable-labels, #printable-labels * { visibility: visible; }
-              #printable-labels { position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 0; background-color: white; }
+              #printable-labels { position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 0; }
               @page { size: auto; margin: 5mm; }
+              
+              /* SMART GRID: Auto-adjusts columns based on paper width */
+              .label-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                gap: 4mm;
+              }
             `}
           </style>
-          <div className="grid grid-cols-3 gap-2">
+          
+          <div className="label-grid">
             {Array.from({ length: savedItem.pieces_per_box > 1 ? Math.ceil(savedItem.quantity / savedItem.pieces_per_box) : savedItem.quantity }).map((_, i) => (
-              <div key={i} className="border border-gray-400 bg-white p-1 flex flex-col items-center text-center h-[160px] justify-between break-inside-avoid">
+              <div key={i} className="label-card border border-black bg-white p-2 flex flex-col items-center text-center h-[160px] justify-between break-inside-avoid">
                 <div className="w-full">
-                  <div className="font-bold text-sm text-black">प्रगती'ज सखी कलेक्शन</div>
-                  <div className="text-[10px] text-gray-800">साई भवन, शहापूर</div>
+                  <div className="font-bold text-sm text-black">SAKHI COLLECTIONS</div>
+                  <div className="font-bold text-xs mt-1 truncate">{savedItem.item_name}</div>
+                  <div className="text-[10px] text-gray-800">
+                    {savedItem.make} {savedItem.brand_name ? `- ${savedItem.brand_name}` : ''}
+                  </div>
                 </div>
                 <div className="font-extrabold text-xl text-black">₹{savedItem.selling_price}</div>
                 <div className="w-full flex justify-center overflow-hidden">
                   <Barcode value={savedItem.item_code} height={35} width={1.4} fontSize={11} displayValue={true} margin={2} />
-                </div>
-                <div className="text-[7px] leading-tight text-black w-full px-1 mt-1">
-                   सूचना:- सिल्क, जरी & फॅन्सी साड्या ड्रायकलिन कराव्यात. गॅरंटी नाही.
                 </div>
               </div>
             ))}
