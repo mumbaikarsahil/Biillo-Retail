@@ -3,7 +3,8 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner, toast as sonnerToast } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route, useLocation, useNavigate } from "react-router-dom";
+// FIX: Import HashRouter instead of BrowserRouter
+import { HashRouter, Routes, Route, useLocation, useNavigate } from "react-router-dom";
 import { App as CapacitorApp } from "@capacitor/app";
 import { StatusBar, Style } from "@capacitor/status-bar";
 
@@ -86,8 +87,8 @@ const AppRoutes = () => {
       <Route path="/udhaar" element={<Udhaar />} />
       <Route path="/sales" element={<Sales />} />
       <Route path="/settings" element={<Settings />} />
-      <Route path="*" element={<NotFound />} />
       <Route path="/invoice/:id" element={<InvoiceView />} />
+      <Route path="*" element={<NotFound />} />
     </Routes>
   );
 };
@@ -97,10 +98,10 @@ const App = () => (
     <TooltipProvider>
       <Toaster />
       <Sonner />
-      <BrowserRouter>
-        {/* We moved Routes into AppRoutes to access navigation hooks */}
+      {/* FIX: Use HashRouter here */}
+      <HashRouter>
         <AppRoutes />
-      </BrowserRouter>
+      </HashRouter>
     </TooltipProvider>
   </QueryClientProvider>
 );

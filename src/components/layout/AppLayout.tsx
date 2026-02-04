@@ -27,7 +27,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         <div className="flex grow flex-col gap-y-5 overflow-y-auto border-r border-border bg-card px-6 pb-4">
           <div className="flex h-16 shrink-0 items-center gap-2">
             <img src="/logo.png" alt="Logo" className="h-8 w-8 object-contain" />
-            <span className="text-xl font-bold text-foreground">Sakhi Collection</span>
+            <span className="text-xl font-bold text-foreground">Biillo Retail</span>
           </div>
           <nav className="flex flex-1 flex-col">
             <ul className="flex flex-1 flex-col gap-y-2">
@@ -64,7 +64,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         {/* Optional: Minimal Mobile Brand Header (If you want a logo at the top on mobile) */}
         <div className="lg:hidden flex items-center gap-2 px-4 py-3 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-40">
            <img src="/logo.png" alt="Logo" className="h-6 w-6 object-contain" />
-           <span className="font-bold text-lg">Sakhi Collection</span>
+           <span className="font-bold text-lg">Biillo Retail</span>
         </div>
 
         <div className="px-4 py-6 sm:px-6 lg:px-8">

@@ -46,6 +46,58 @@ export default function Billing() {
   // --- NEW UDHAAR STATE ---
   const [isUdhaar, setIsUdhaar] = useState(false);
   const [customerName, setCustomerName] = useState("");
+  const [quickCategories, setQuickCategories] = useState<string[]>([]);
+  const [viewMode, setViewMode] = useState<'scan' | 'payment'>('scan');
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'online' | 'udhaar'>('cash');
+
+  // --- NEW: Fetch Unique Categories from DB ---
+  // --- UPDATED: Fetch Categories with Fallback ---
+  useEffect(() => {
+    const fetchCategories = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('items')
+          .select('item_name')
+          .not('item_name', 'is', null);
+
+        if (error) throw error;
+
+        if (data && data.length > 0) {
+          const uniqueCats = Array.from(new Set(data.map(item => 
+            item.item_name.trim().charAt(0).toUpperCase() + item.item_name.trim().slice(1)
+          )));
+          setQuickCategories(uniqueCats.slice(0, 8)); // Top 8
+        } else {
+            // FALLBACK: If DB is empty, use these defaults so UI isn't empty
+            setQuickCategories(["Sarees", "Kurtis", "Leggings", "Tops", "Jeans", "Dupatta"]);
+        }
+      } catch (err) {
+        console.error("Error fetching categories:", err);
+        // Fallback on error
+        setQuickCategories(["Sarees", "Kurtis", "Leggings", "Tops", "Jeans", "Dupatta"]);
+      }
+    };
+    fetchCategories();
+  }, []);
+  // Define your top categories here
+  // --- HELPER: Auto-assign icons to dynamic categories ---
+const getCategoryIcon = (categoryName: string) => {
+  const lowerName = categoryName.toLowerCase();
+  
+  if (lowerName.includes("saree")) return "👘";
+  if (lowerName.includes("kurti") || lowerName.includes("kurta")) return "👗";
+  if (lowerName.includes("leg")) return "👖"; // Leggings
+  if (lowerName.includes("top") || lowerName.includes("tunic")) return "👚";
+  if (lowerName.includes("shirt")) return "👔";
+  if (lowerName.includes("jeans") || lowerName.includes("pant")) return "👖";
+  if (lowerName.includes("dupatta") || lowerName.includes("scarf")) return "🧣";
+  if (lowerName.includes("bag") || lowerName.includes("purse")) return "👜";
+  if (lowerName.includes("perfume") || lowerName.includes("scent")) return "🧴";
+  if (lowerName.includes("jewelry") || lowerName.includes("lace")) return "📿";
+  if (lowerName.includes("kids")) return "🧸";
+  
+  return "📦"; // Default icon for unknown categories
+};
   // ------------------------
 
 // Store the user's desired final amount as a string to handle empty states easily
@@ -108,11 +160,12 @@ const lastScannedRef = useRef<{ code: string; time: number }>({ code: "", time: 
     }
     
     try {
+      // Added brand_name to select
       const { data, error } = await supabase
         .from('items')
-        .select('*')
+        .select('*, brand_name') 
         .or(`item_code.ilike.%${query}%,item_name.ilike.%${query}%`)
-        .limit(5);
+        .limit(10); // Increased limit slightly
         
       if (error) throw error;
       setSearchResults(data || []);
@@ -162,6 +215,8 @@ const lastScannedRef = useRef<{ code: string; time: number }>({ code: "", time: 
       description: `${item.item_name} - ${quantity} × ₹${item.selling_price}`,
     });
   };
+
+  
 
   const addToCart = useCallback(
     async (itemCode: string, closeDropdown = true) => {
@@ -323,24 +378,19 @@ const lastScannedRef = useRef<{ code: string; time: number }>({ code: "", time: 
 
   const completeSale = async () => {
     if (cart.length === 0) {
-      toast({
-        title: "Empty Cart",
-        description: "Add items before completing sale",
-        variant: "destructive",
-      });
+      toast({ title: "Empty Cart", variant: "destructive" });
       return;
     }
 
-    // --- UDHAAR VALIDATION ---
-    if (isUdhaar && (!customerName || !customerPhone)) {
+    // Validation: If Udhaar, Name/Phone is mandatory
+    if (paymentMethod === 'udhaar' && (!customerName || !customerPhone)) {
       toast({
         title: "Details Required",
-        description: "Customer Name and Phone are required for Udhaar.",
+        description: "Customer Name and Phone are required for Credit/Udhaar.",
         variant: "destructive",
       });
       return;
     }
-    // -------------------------
 
     setIsProcessing(true);
     try {
@@ -352,17 +402,18 @@ const lastScannedRef = useRef<{ code: string; time: number }>({ code: "", time: 
           discount_amount: isReturnMode ? 0 : discountAmount,
           final_amount: isReturnMode ? -finalTotal : finalTotal,
           customer_phone: customerPhone || null,
-          customer_name: customerName || null, // Saving Name
-          payment_status: isUdhaar ? 'pending' : 'paid', // 'pending' for udhaar
-          payment_method: isUdhaar ? 'udhaar' : 'cash',
-          is_udhaar: isUdhaar // Optional flag if your DB has it
+          customer_name: customerName || null,
+          // [UPDATED] Use paymentMethod state
+          payment_status: paymentMethod === 'udhaar' ? 'pending' : 'paid',
+          payment_method: paymentMethod, 
+          is_udhaar: paymentMethod === 'udhaar'
         })
         .select()
         .single();
 
       if (billError) throw billError;
 
-      // Create bill items
+      // Insert Items
       const billItems = cart.map((item) => ({
         bill_id: bill.id,
         item_id: item.id,
@@ -373,23 +424,22 @@ const lastScannedRef = useRef<{ code: string; time: number }>({ code: "", time: 
       const { error: itemsError } = await supabase.from("bill_items").insert(billItems);
       if (itemsError) throw itemsError;
 
-      // Update stock
+      // Update Stock
       for (const item of cart) {
         const newQuantity = isReturnMode
           ? item.quantity + item.cartQuantity
           : item.quantity - item.cartQuantity;
 
-        const { error: updateError } = await supabase
-          .from("items")
-          .update({ quantity: newQuantity })
-          .eq("id", item.id);
-
-        if (updateError) throw updateError;
+        await supabase.from("items").update({ quantity: newQuantity }).eq("id", item.id);
       }
 
       setCompletedBill({ ...bill, items: cart });
       setShowSuccessModal(true);
       clearCart();
+      
+      // [IMPORTANT] Reset View to Scan Mode
+      setViewMode('scan'); 
+      setPaymentMethod('cash');
     } catch (error: any) {
       toast({
         title: "Error",
@@ -400,7 +450,6 @@ const lastScannedRef = useRef<{ code: string; time: number }>({ code: "", time: 
       setIsProcessing(false);
     }
   };
-
   // --- OPTIMIZED BLUETOOTH PRINT (App Only) ---
  // --- MOBILE APP PRINTING (Bluetooth) ---
 // --- MOBILE APP PRINTING (Bluetooth) ---
@@ -456,6 +505,54 @@ const printViaBluetooth = async () => {
     return false; // <--- Return false on failure
   }
 };
+
+useEffect(() => {
+  let barcodeBuffer = "";
+  let lastKeyTime = 0;
+
+  const handleGlobalKeyDown = (e: KeyboardEvent) => {
+    // 1. F2 Shortcut: Focus Search Box
+    if (e.key === 'F2') {
+      e.preventDefault();
+      searchInputRef.current?.focus();
+      return;
+    }
+    
+    // 2. Escape Shortcut: Clear Search/Dropdown
+    if (e.key === 'Escape') {
+      setShowDropdown(false);
+      setManualCode("");
+      return;
+    }
+
+    // 3. Global Scanner Logic (USB Scanners act like keyboards)
+    // If user is typing in an input (like Name/Phone), don't interfere
+    if ((e.target as HTMLElement).tagName === 'INPUT') return;
+
+    const currentTime = Date.now();
+    
+    // Scanners type fast (<50ms). If slow, it's a human -> reset buffer.
+    if (currentTime - lastKeyTime > 50) {
+      barcodeBuffer = "";
+    }
+    lastKeyTime = currentTime;
+
+    if (e.key === 'Enter') {
+      if (barcodeBuffer.length > 2) { 
+         // If valid barcode, add to cart & clear buffer
+         addToCart(barcodeBuffer);
+         barcodeBuffer = "";
+         playBeep(); 
+      }
+    } else if (e.key.length === 1) {
+      // Collect characters
+      barcodeBuffer += e.key;
+    }
+  };
+
+  window.addEventListener('keydown', handleGlobalKeyDown);
+  return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+}, [addToCart]);
 
 // --- MAIN HANDLER: UNIVERSAL PRINT ---
 const printBill = async () => {
@@ -566,7 +663,6 @@ const printBill = async () => {
 
     // 1. HARDCODE YOUR VERCEL DOMAIN HERE
     // DO NOT use window.location.origin for the share link
-    // Example: https://sakhi-billing.vercel.app (No trailing slash)
     const PUBLIC_DOMAIN = "https://stock-buddy-drab.vercel.app"; 
     
     // 2. Create the Secure Link
@@ -775,11 +871,185 @@ Visit Again! ✨`
     setTimeout(() => oscillator.stop(), 100); // Short, snappy 100ms beep
   };
 
+  // [NEW] Floating Cart Bar for Mobile
+  const MobileFloatingCart = () => {
+    // Only show on mobile, when scanning, and if cart has items
+    if (viewMode !== 'scan' || cart.length === 0) return null;
+
+    return (
+      <div className="lg:hidden fixed bottom-[70px] left-4 right-4 z-50 animate-in slide-in-from-bottom-10 fade-in">
+        <Button 
+          size="lg" 
+          className="w-full h-14 shadow-2xl rounded-xl bg-primary text-primary-foreground flex items-center justify-between px-4"
+          onClick={() => setViewMode('payment')} // Go to Payment Screen
+        >
+          <div className="flex flex-col items-start">
+            <span className="text-xs opacity-90 font-normal uppercase">
+              {cart.reduce((a, b) => a + b.cartQuantity, 0)} Items
+            </span>
+            <span className="text-xl font-bold">
+              ₹{subtotal.toFixed(0)}
+            </span>
+          </div>
+          
+          <div className="flex items-center gap-2 bg-white/20 px-3 py-1 rounded-lg">
+            <span className="font-semibold">Checkout</span>
+            <ArrowLeft className="h-5 w-5 rotate-180" /> {/* Right Arrow */}
+          </div>
+        </Button>
+      </div>
+    );
+  };
+
+  // [NEW] Dedicated Mobile Payment Screen
+  const MobilePaymentScreen = () => {
+    // This component handles the entire "Checkout" view on mobile
+    
+    return (
+      <div className="lg:hidden flex flex-col h-[100dvh] bg-gray-50 animate-in slide-in-from-right-5 duration-200">
+        
+        {/* 1. Header */}
+        <div className="bg-white border-b p-3 flex items-center gap-3 shadow-sm shrink-0 pt-safe">
+          <Button variant="ghost" size="icon" onClick={() => setViewMode('scan')}>
+            <ArrowLeft className="h-6 w-6 text-gray-700" />
+          </Button>
+          <h2 className="font-bold text-lg">Checkout</h2>
+          <div className="ml-auto">
+             <Badge variant={isReturnMode ? "destructive" : "outline"} className="text-xs">
+                {isReturnMode ? "RETURNING" : "SELLING"}
+             </Badge>
+          </div>
+        </div>
+
+        {/* 2. Scrollable Content (Bill Details) */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-5">
+          
+          {/* A. Bill Summary Card */}
+          <Card className="border-0 shadow-sm bg-white">
+            <CardContent className="p-4 space-y-4">
+              <div className="flex justify-between text-sm text-gray-500 border-b pb-2">
+                <span>Subtotal ({cart.length} items)</span>
+                <span>₹{subtotal}</span>
+              </div>
+              
+              {/* Discount / Final Amount Input */}
+              <div className="space-y-1">
+                <Label className="text-[10px] font-bold uppercase text-muted-foreground">Final Bill Amount</Label>
+                <div className="flex items-center gap-2">
+                  <span className="text-3xl font-bold text-gray-400">₹</span>
+                  <Input 
+                    type="number" 
+                    className="text-4xl font-black h-14 border-0 rounded-none focus-visible:ring-0 px-0 bg-transparent text-primary"
+                    value={manualFinalAmount}
+                    onChange={e => setManualFinalAmount(e.target.value)}
+                    placeholder={subtotal.toString()}
+                  />
+                </div>
+                {discountAmount > 0 && (
+                   <p className="text-xs text-green-600 font-medium">
+                     Discount: ₹{discountAmount.toFixed(0)} ({calculatedDiscountPercent}%)
+                   </p>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* B. Customer Details */}
+          <div className="space-y-2">
+            <h3 className="text-xs font-bold text-gray-500 uppercase px-1">Customer</h3>
+            <div className="bg-white p-1 rounded-xl shadow-sm border space-y-1">
+              <div className="flex items-center px-3 py-2 border-b border-gray-100">
+                  <Phone className="h-4 w-4 text-gray-400 mr-3" />
+                  <Input 
+                    type="tel" 
+                    placeholder="Mobile Number" 
+                    value={customerPhone}
+                    onChange={e => setCustomerPhone(e.target.value)}
+                    className="border-0 shadow-none focus-visible:ring-0 h-9 p-0 text-base"
+                  />
+              </div>
+              <div className="flex items-center px-3 py-2">
+                  <User className="h-4 w-4 text-gray-400 mr-3" />
+                  <Input 
+                    placeholder="Customer Name" 
+                    value={customerName}
+                    onChange={e => setCustomerName(e.target.value)}
+                    className="border-0 shadow-none focus-visible:ring-0 h-9 p-0 text-base"
+                  />
+              </div>
+            </div>
+          </div>
+
+          {/* C. Payment Method Toggles */}
+          <div className="space-y-2">
+             <h3 className="text-xs font-bold text-gray-500 uppercase px-1">Payment Mode</h3>
+             <div className="grid grid-cols-3 gap-3">
+                {/* CASH */}
+                <div 
+                  onClick={() => setPaymentMethod('cash')}
+                  className={`cursor-pointer rounded-xl border p-3 flex flex-col items-center justify-center gap-2 transition-all ${paymentMethod === 'cash' ? 'border-green-500 bg-green-50 ring-1 ring-green-500' : 'border-gray-200 bg-white'}`}
+                >
+                   <div className={`p-2 rounded-full ${paymentMethod === 'cash' ? 'bg-green-200' : 'bg-gray-100'}`}>
+                      <DollarSign className={`h-5 w-5 ${paymentMethod === 'cash' ? 'text-green-700' : 'text-gray-500'}`}/>
+                   </div>
+                   <span className={`font-bold text-xs ${paymentMethod === 'cash' ? 'text-green-700' : 'text-gray-600'}`}>Cash</span>
+                </div>
+
+                {/* ONLINE */}
+                <div 
+                  onClick={() => setPaymentMethod('online')}
+                  className={`cursor-pointer rounded-xl border p-3 flex flex-col items-center justify-center gap-2 transition-all ${paymentMethod === 'online' ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500' : 'border-gray-200 bg-white'}`}
+                >
+                   <div className={`p-2 rounded-full ${paymentMethod === 'online' ? 'bg-blue-200' : 'bg-gray-100'}`}>
+                      <CreditCard className={`h-5 w-5 ${paymentMethod === 'online' ? 'text-blue-700' : 'text-gray-500'}`}/>
+                   </div>
+                   <span className={`font-bold text-xs ${paymentMethod === 'online' ? 'text-blue-700' : 'text-gray-600'}`}>Online</span>
+                </div>
+
+                {/* UDHAAR */}
+                <div 
+                  onClick={() => setPaymentMethod('udhaar')}
+                  className={`cursor-pointer rounded-xl border p-3 flex flex-col items-center justify-center gap-2 transition-all ${paymentMethod === 'udhaar' ? 'border-orange-500 bg-orange-50 ring-1 ring-orange-500' : 'border-gray-200 bg-white'}`}
+                >
+                   <div className={`p-2 rounded-full ${paymentMethod === 'udhaar' ? 'bg-orange-200' : 'bg-gray-100'}`}>
+                      <User className={`h-5 w-5 ${paymentMethod === 'udhaar' ? 'text-orange-700' : 'text-gray-500'}`}/>
+                   </div>
+                   <span className={`font-bold text-xs ${paymentMethod === 'udhaar' ? 'text-orange-700' : 'text-gray-600'}`}>Credit</span>
+                </div>
+             </div>
+          </div>
+        </div>
+
+        {/* 3. Footer Button */}
+        <div className="p-4 bg-white border-t shrink-0 pb-safe">
+          <Button 
+            size="lg" 
+            className={`w-full h-12 text-lg font-bold rounded-xl shadow-md
+              ${paymentMethod === 'udhaar' ? 'bg-orange-600 hover:bg-orange-700' : 'bg-primary hover:bg-primary/90'}
+              ${isReturnMode ? 'bg-destructive' : ''}
+            `}
+            onClick={completeSale}
+            disabled={isProcessing}
+          >
+             {isProcessing ? "Processing..." : (
+               <div className="flex items-center justify-center gap-2">
+                 <span>{paymentMethod === 'udhaar' ? 'Confirm Credit' : 'Pay'}</span>
+                 <span>₹{finalTotal.toFixed(0)}</span>
+               </div>
+             )}
+          </Button>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <AppLayout>
       {/* Helper Modals */}
       <PackItemModal />
       <EditQuantityModal />
+      
+      {/* Success Modal */}
       <Dialog open={showSuccessModal} onOpenChange={setShowSuccessModal}>
         <DialogContent className="w-[90%] max-w-md rounded-xl">
           <DialogHeader>
@@ -809,63 +1079,58 @@ Visit Again! ✨`
         </DialogContent>
       </Dialog>
 
-      {/* MAIN CONTAINER 
-         h-[100dvh] fixes the mobile browser address bar scroll issue.
-         flex-col for mobile, lg:flex-row for desktop split view
+      {/* 1. MOBILE PAYMENT SCREEN 
+         Only visible if viewMode is 'payment' on mobile 
       */}
-      <div className="flex flex-col lg:flex-row h-[calc(100dvh-4rem)] lg:h-[calc(100vh-4rem)] -m-4 sm:m-0 bg-background overflow-hidden relative">
+      {viewMode === 'payment' && <MobilePaymentScreen />}
+
+      {/* 2. MAIN SCANNER SCREEN 
+         Hidden on mobile if viewMode is 'payment'. 
+         Always visible on Desktop.
+      */}
+      <div className={`flex flex-col lg:flex-row h-[100dvh] lg:h-[calc(100vh-4rem)] bg-background overflow-hidden relative ${viewMode === 'payment' ? 'hidden lg:flex' : 'flex'}`}>
         
-        {/* --- LEFT COLUMN: SEARCH & CART LIST --- */}
-        <div className="flex-1 flex flex-col h-full overflow-hidden relative">
+        {/* Floating Cart (Only visible on Mobile Scan Mode) */}
+        <MobileFloatingCart />
+
+        {/* --- LEFT COLUMN: SCANNER & INVENTORY --- */}
+        <div className="shrink-0 h-full lg:flex-1 flex flex-col overflow-hidden relative bg-gray-50 border-r z-10">
           
           {/* Header & Search */}
-          <div className="bg-card border-b shadow-sm z-20 shrink-0 p-3 space-y-3">
+          <div className="bg-white lg:bg-card border-b shadow-sm z-20 shrink-0 p-2 lg:p-3 space-y-2">
             {/* Top Row: Title, Mode, Scan Toggle */}
             <div className="flex items-center justify-between">
-               <div className="flex items-center gap-3">
-      <Button 
-        variant="ghost" 
-        size="icon" 
-        className="-ml-2 h-9 w-9 text-muted-foreground" 
-        onClick={() => navigate("/")} // Goes back to Dashboard
-      >
-        <ArrowLeft className="h-5 w-5" />
-      </Button>
-                  <div className="flex items-center gap-2 bg-muted rounded-full px-2 py-1">
+               <div className="flex items-center gap-2 lg:gap-3">
+                  <Button variant="ghost" size="icon" className="-ml-2 h-8 w-8 text-muted-foreground" onClick={() => navigate("/")}>
+                    <ArrowLeft className="h-5 w-5" />
+                  </Button>
+                  <div className="flex items-center gap-1 lg:gap-2 bg-muted rounded-full px-2 py-1">
                     <span className={`text-[10px] uppercase font-bold ${!isReturnMode ? 'text-primary' : 'text-muted-foreground'}`}>Sale</span>
                     <Switch 
                       checked={isReturnMode} 
                       onCheckedChange={(c) => { setIsReturnMode(c); setIsUdhaar(false); clearCart(); }} 
-                      className="scale-75" 
+                      className="scale-75 origin-left" 
                     />
                     <span className={`text-[10px] uppercase font-bold ${isReturnMode ? 'text-destructive' : 'text-muted-foreground'}`}>Ret</span>
                   </div>
-                  
                </div>
 
-               <div className="flex gap-2">
-                 {cart.length > 0 && (
-                    <Button variant="ghost" size="icon" className="h-9 w-9 text-destructive bg-destructive/10 hover:bg-destructive/20" onClick={clearCart}>
-                      <Trash2 className="h-4 w-4"/>
-                    </Button>
-                  )}
-                  <Button 
-                    variant={isScanning ? "destructive" : "default"} 
-                    size="sm"
-                    onClick={isScanning ? stopScanner : startScanner}
-                    className="h-9 px-4 shadow-sm"
-                  >
-                    {isScanning ? <CameraOff className="mr-2 h-4 w-4"/> : <Camera className="mr-2 h-4 w-4"/>}
-                    {isScanning ? "Stop" : "Scan"}
-                  </Button>
-               </div>
+               <Button 
+                 variant={isScanning ? "destructive" : "default"} 
+                 size="sm"
+                 onClick={isScanning ? stopScanner : startScanner}
+                 className="h-8 px-3 shadow-sm text-xs"
+               >
+                 {isScanning ? <CameraOff className="mr-2 h-3 w-3"/> : <Camera className="mr-2 h-3 w-3"/>}
+                 {isScanning ? "Stop" : "Scan"}
+               </Button>
             </div>
 
             {/* Scanner Viewport (Animated) */}
-            <div className={`relative bg-black rounded-lg overflow-hidden transition-all duration-300 ease-in-out ${isScanning ? 'h-[200px] mb-2' : 'h-0'}`}>
+            <div className={`relative bg-black rounded-lg overflow-hidden transition-all duration-300 ease-in-out ${isScanning ? 'h-[150px] mb-1' : 'h-0'}`}>
               <div id="qr-reader" className="w-full h-full" />
               {isScanning && (
-                <Button variant="ghost" size="icon" className="absolute top-2 right-2 text-white h-8 w-8 bg-black/50 rounded-full z-30" onClick={stopScanner}>
+                <Button variant="ghost" size="icon" className="absolute top-2 right-2 text-white h-7 w-7 bg-black/50 rounded-full z-30" onClick={stopScanner}>
                   <X className="h-4 w-4"/>
                 </Button>
               )}
@@ -877,15 +1142,15 @@ Visit Again! ✨`
                 <div className="relative flex-1">
                   <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
                   <Input 
-                    placeholder="Search Item Code or Name..." 
+                    placeholder="Search Code / Name..." 
                     value={manualCode}
                     onChange={handleManualCodeChange}
                     onFocus={() => searchResults.length > 0 && setShowDropdown(true)}
                     onKeyDown={(e) => e.key === "Enter" && manualCode && (addToCart(manualCode), setManualCode(""))}
-                    className="pl-9 h-10 text-base" // Larger text for mobile inputs
+                    className="pl-9 h-9 lg:h-10 text-sm lg:text-base"
                   />
                 </div>
-                <Button size="icon" className="h-10 w-10 shrink-0" onClick={() => manualCode && (addToCart(manualCode), setManualCode(""))} disabled={!manualCode}>
+                <Button size="icon" className="h-9 lg:h-10 w-9 lg:w-10 shrink-0" onClick={() => manualCode && (addToCart(manualCode), setManualCode(""))} disabled={!manualCode}>
                   <Plus className="h-5 w-5" />
                 </Button>
               </div>
@@ -897,8 +1162,11 @@ Visit Again! ✨`
                     <div key={item.id} className="p-3 border-b last:border-0 hover:bg-accent active:bg-accent/80 cursor-pointer flex justify-between items-center"
                       onClick={() => { setManualCode(item.item_code); addToCart(item.item_code); setShowDropdown(false); }}>
                       <div>
-                        <div className="font-medium text-base">{item.item_name}</div>
-                        <div className="text-xs text-muted-foreground">{item.item_code}</div>
+                        <div className="font-medium text-sm lg:text-base">{item.item_name}</div>
+                        <div className="flex gap-2 items-center text-xs text-muted-foreground">
+                            <span>{item.item_code}</span>
+                            {item.brand_name && <span className="text-primary/80 font-medium">• {item.brand_name}</span>}
+                        </div>
                       </div>
                       <div className="font-bold text-primary">₹{item.selling_price}</div>
                     </div>
@@ -908,169 +1176,116 @@ Visit Again! ✨`
             </div>
           </div>
 
-          {/* Cart List */}
-          {/* pb-48 ensures the last item scrolls ABOVE the fixed footer on mobile */}
-          <div className="flex-1 overflow-y-auto p-3 space-y-3 bg-muted/20 pb-48 lg:pb-4">
-             {cart.length === 0 ? (
-                <div className="h-[50vh] flex flex-col items-center justify-center text-muted-foreground/40">
-                  <div className="bg-muted/30 p-6 rounded-full mb-4">
-                    <ShoppingCart className="h-10 w-10" />
-                  </div>
-                  <p className="font-medium">Cart is empty</p>
-                  <p className="text-xs mt-1">Scan items to start billing</p>
-                </div>
-             ) : (
-               cart.map((item) => (
-                 <Card key={item.id} className="border-0 shadow-sm ring-1 ring-border/50">
-                    <CardContent className="p-3 flex items-center justify-between gap-3">
-                       <div className="flex-1 min-w-0">
-                          <h3 className="font-semibold text-sm truncate">{item.item_name}</h3>
-                          <div className="flex items-center gap-2 mt-1">
-                             <Badge variant="secondary" className="font-normal text-[10px] h-5 px-1">{item.size || 'STD'}</Badge>
-                             <span className="text-xs text-muted-foreground">₹{item.selling_price} / unit</span>
-                          </div>
-                       </div>
-                       
-                       <div className="flex flex-col items-end gap-1">
-                          <div className="flex items-center bg-secondary rounded-lg p-0.5">
-                             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => updateQuantity(item.id, -1)}>
-                               <Minus className="h-3 w-3" />
-                             </Button>
-                             <div 
-                               className="w-8 text-center font-bold text-sm cursor-pointer border-b border-dashed border-primary/50"
-                               onClick={() => setEditQuantityModal({ open: true, item, newQuantity: String(item.cartQuantity) })}
-                             >
-                               {item.cartQuantity}
-                             </div>
-                             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => updateQuantity(item.id, 1)}>
-                               <Plus className="h-3 w-3" />
-                             </Button>
-                          </div>
-                          <div className="font-bold text-base">₹{(item.selling_price * item.cartQuantity).toFixed(0)}</div>
-                       </div>
-                    </CardContent>
-                 </Card>
-               ))
-             )}
+          {/* Categories Grid - SCROLLABLE */}
+          <div className="flex-1 overflow-y-auto p-2 lg:p-4 bg-gray-50/50 pb-24 lg:pb-4">
+             {/* Only show header on desktop */}
+             <div className="hidden lg:flex mb-4 items-center justify-between">
+               <div>
+                 <h2 className="text-lg font-bold text-gray-700 leading-none">Inventory</h2>
+                 <p className="text-xs text-muted-foreground mt-1">Select category or scan item</p>
+               </div>
+               <Badge variant="outline" className="text-[10px] text-muted-foreground">F2 to Search</Badge>
+             </div>
+
+             <div className="grid grid-cols-4 gap-2 lg:gap-3">
+                {quickCategories.map((catName) => (
+                    <Card 
+                      key={catName}
+                      className="hover:bg-blue-50 cursor-pointer border hover:border-blue-400 transition-all active:scale-95 shadow-sm group bg-white"
+                      onClick={() => {
+                        setManualCode(catName);
+                        searchItems(catName);
+                        setShowDropdown(true);
+                        searchInputRef.current?.focus(); 
+                      }}
+                    >
+                      <CardContent className="p-2 lg:p-3 flex flex-col items-center justify-center text-center gap-1">
+                        <span className="text-xl lg:text-2xl group-hover:scale-110 transition-transform">{getCategoryIcon(catName)}</span>
+                        <span className="font-semibold text-[10px] lg:text-xs text-gray-600 group-hover:text-blue-600 truncate w-full">{catName}</span>
+                      </CardContent>
+                    </Card>
+                  ))
+                }
+             </div>
           </div>
         </div>
 
-        {/* --- RIGHT COLUMN / BOTTOM SHEET: PAYMENTS --- */}
-        {/* On Mobile: Fixed to bottom. On Desktop: Static right column */}
-        <div className={`
-            bg-background border-t lg:border-t-0 lg:border-l shadow-[0_-4px_20px_rgba(0,0,0,0.1)] 
-            z-30 shrink-0 
-            fixed bottom-0 left-0 right-0 
-            lg:relative lg:w-[380px] lg:flex lg:flex-col lg:justify-end
-        `}>
-           
-           {/* Collapsible/Expandable Options Area */}
-           <div className="px-4 pt-3 pb-2 space-y-3">
-              
-              {/* Row 1: Quick Toggles (Discount & Udhaar) */}
-              {cart.length > 0 && (
-                <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
-                    {/* Discount Control */}
-                    {/* Discount Control - REPLACED */}
-                    <div className="flex items-center gap-2 bg-secondary/40 rounded-lg p-2 border flex-1 min-w-[140px]">
-                    <div className="flex flex-col items-start justify-center px-1">
-                      <span className="text-[10px] text-muted-foreground font-semibold uppercase">
-                        Final Bill Amt
-                      </span>
-                      {discountAmount > 0 && (
-                        <span className="text-[10px] text-green-600 font-bold">
-                          ({calculatedDiscountPercent}% Off)
-                        </span>
-                      )}
-                    </div>
-                    <Input 
-                        type="number" 
-                        className="h-8 border-0 bg-white shadow-sm text-right pl-6 pr-2 focus-visible:ring-0 font-bold text-lg"
-                        placeholder=""  // REMOVED the placeholder so it doesn't confuse the user
-                        value={manualFinalAmount}
-                        onChange={e => setManualFinalAmount(e.target.value)}
-                        onFocus={(e) => {
-                        // If the box is empty, fill it with the current subtotal instantly
-                        // This makes the number "real" so Backspace works
-                        if (!manualFinalAmount) {
-                            setManualFinalAmount(subtotal.toString());
-                        }
-                        // Select the text after a tiny delay so the new value is highlighted
-                        setTimeout(() => e.target.select(), 10);
-                    }}
-                />
-                    </div>
-
-                    {/* Udhaar Toggle */}
-                    <div 
-                      className={`flex items-center gap-2 px-3 rounded-lg border cursor-pointer transition-colors ${isUdhaar ? 'bg-orange-50 border-orange-200' : 'bg-secondary/40 border-transparent'}`}
-                      onClick={() => setIsUdhaar(!isUdhaar)}
-                    >
-                      <span className={`text-sm font-bold ${isUdhaar ? 'text-orange-700' : 'text-muted-foreground'}`}>Credit</span>
-                      <Switch checked={isUdhaar} onCheckedChange={setIsUdhaar} className="scale-75 data-[state=checked]:bg-orange-600" />
-                    </div>
+        {/* --- RIGHT COLUMN: DESKTOP CART (HIDDEN ON MOBILE NOW) --- */}
+        <div className="hidden lg:flex flex-none w-[400px] bg-white border-l shadow-[-5px_0_15px_rgba(0,0,0,0.05)] z-20 flex-col h-full">
+            {/* 1. Cart Header */}
+            <div className="shrink-0 p-3 border-b bg-white flex items-center justify-between shadow-sm">
+                <div className="flex items-center gap-2">
+                    <ShoppingCart className="h-4 w-4 text-primary" />
+                    <span className="font-bold text-sm">Bill</span>
+                    <Badge variant="secondary" className="ml-1">{cart.length}</Badge>
                 </div>
-              )}
+                {cart.length > 0 && (
+                    <Button variant="ghost" size="sm" onClick={clearCart} className="h-7 text-xs text-red-500 hover:text-red-600 hover:bg-red-50">
+                        <Trash2 className="h-3 w-3 mr-1"/> Clear
+                    </Button>
+                )}
+            </div>
 
-              {/* Row 2: Customer Details (Always Visible now) */}
-<div className={`
-  p-2 rounded-lg border space-y-2 transition-colors duration-200
-  ${isUdhaar ? 'bg-orange-50 border-orange-200' : 'bg-white border-transparent'}
-`}>
-  <div className="flex gap-2">
-    {/* Customer Name Input */}
-    <div className="relative flex-1">
-      <User className={`absolute left-2.5 top-2.5 h-3.5 w-3.5 ${isUdhaar ? 'text-orange-400' : 'text-muted-foreground'}`}/>
-      <Input 
-        placeholder={isUdhaar ? "Customer Name (Required)" : "Customer Name (Optional)"}
-        className={`pl-8 h-9 text-sm focus-visible:ring-1 ${isUdhaar ? 'border-orange-200 focus-visible:ring-orange-300' : ''}`} 
-        value={customerName} 
-        onChange={e => setCustomerName(e.target.value)} 
-      />
-    </div>
+            {/* 2. Cart List (Desktop) */}
+            <div className="flex-1 overflow-y-auto p-2 space-y-2 bg-gray-50/50">
+                {cart.length === 0 ? (
+                    <div className="h-full flex flex-col items-center justify-center text-muted-foreground opacity-40 select-none pb-10">
+                        <ShoppingCart className="h-10 w-10 mb-2" />
+                        <span className="text-sm">Cart is empty</span>
+                    </div>
+                ) : (
+                    cart.map((item) => (
+                        <Card key={item.id} className="border-0 shadow-sm ring-1 ring-border/50 bg-white">
+                            <CardContent className="p-2 flex items-center gap-2">
+                                <div className="flex flex-col items-center bg-gray-100 rounded-md border border-gray-200">
+                                    <button className="w-6 h-5 flex items-center justify-center hover:bg-white rounded-t-md text-gray-600" onClick={() => updateQuantity(item.id, 1)}><ChevronUp className="h-3 w-3" /></button>
+                                    <div className="text-xs font-bold py-0.5 w-full text-center bg-white border-y border-gray-200" onClick={() => setEditQuantityModal({ open: true, item, newQuantity: String(item.cartQuantity) })}>{item.cartQuantity}</div>
+                                    <button className="w-6 h-5 flex items-center justify-center hover:bg-white rounded-b-md text-gray-600" onClick={() => updateQuantity(item.id, -1)}><ChevronDown className="h-3 w-3" /></button>
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                    <div className="flex justify-between items-start">
+                                        <h3 className="font-semibold text-sm truncate pr-2">{item.item_name}</h3>
+                                        <span className="font-bold text-sm">₹{(item.selling_price * item.cartQuantity).toFixed(0)}</span>
+                                    </div>
+                                    <div className="flex items-center justify-between mt-1 text-[10px] text-muted-foreground">
+                                        <span>{item.size || 'STD'} × ₹{item.selling_price}</span>
+                                        {item.brand_name && <span className="px-1 bg-gray-100 rounded">{item.brand_name}</span>}
+                                    </div>
+                                </div>
+                            </CardContent>
+                        </Card>
+                    ))
+                )}
+            </div>
 
-    {/* Phone Input */}
-    <div className="relative w-[140px]">
-      <Phone className={`absolute left-2.5 top-2.5 h-3.5 w-3.5 ${isUdhaar ? 'text-orange-400' : 'text-muted-foreground'}`}/>
-      <Input 
-        type="tel"
-        placeholder="Mobile No." 
-        className={`pl-8 h-9 text-sm focus-visible:ring-1 ${isUdhaar ? 'border-orange-200 focus-visible:ring-orange-300' : ''}`} 
-        value={customerPhone} 
-        onChange={e => setCustomerPhone(e.target.value)} 
-      />
-    </div>
-  </div>
-</div>
-           </div>
+            {/* 3. Footer (Desktop) */}
+            <div className="shrink-0 border-t bg-white p-4 space-y-3">
+                <div className="flex justify-between items-center">
+                    <span className="text-sm font-medium text-muted-foreground">Subtotal</span>
+                    <span className="font-bold text-lg">₹{subtotal}</span>
+                </div>
+                
+                <div className="flex gap-2">
+                   <div className="flex-1 space-y-1">
+                      <Label className="text-xs">Customer Name</Label>
+                      <Input placeholder="Optional" value={customerName} onChange={e => setCustomerName(e.target.value)} className="h-8 text-xs"/>
+                   </div>
+                   <div className="w-[120px] space-y-1">
+                      <Label className="text-xs">Mobile</Label>
+                      <Input placeholder="No." value={customerPhone} onChange={e => setCustomerPhone(e.target.value)} className="h-8 text-xs"/>
+                   </div>
+                </div>
 
-           {/* MAIN PAYMENT BAR (Bottom) */}
-           {/* pb-safe handles iPhone Home Bar. lg:pb-4 handles desktop padding */}
-           <div className="bg-card p-4 pt-2 border-t flex items-center gap-3 pb-safe lg:pb-6">
-              <div className="flex-1">
-                 <div className="flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground uppercase tracking-wider font-semibold">Total</span>
-                    {discountAmount > 0 && <span className="text-[10px] bg-green-100 text-green-700 px-1.5 rounded-sm font-bold">-{Math.round(discountAmount)}</span>}
-                 </div>
-                 <div className={`text-3xl font-black leading-tight tracking-tight ${isReturnMode ? 'text-destructive' : 'text-primary'}`}>
-                    ₹{finalTotal.toFixed(0)}
-                 </div>
-              </div>
+                <div className="grid grid-cols-3 gap-2">
+                   <Button variant="outline" className={`h-8 text-xs ${paymentMethod === 'cash' ? 'border-green-500 bg-green-50 text-green-700' : ''}`} onClick={() => setPaymentMethod('cash')}>Cash</Button>
+                   <Button variant="outline" className={`h-8 text-xs ${paymentMethod === 'online' ? 'border-blue-500 bg-blue-50 text-blue-700' : ''}`} onClick={() => setPaymentMethod('online')}>Online</Button>
+                   <Button variant="outline" className={`h-8 text-xs ${paymentMethod === 'udhaar' ? 'border-orange-500 bg-orange-50 text-orange-700' : ''}`} onClick={() => setPaymentMethod('udhaar')}>Credit</Button>
+                </div>
 
-              <Button 
-                size="lg" 
-                className={`
-                  h-14 px-8 text-lg font-bold rounded-xl shadow-xl transition-all active:scale-95
-                  ${isUdhaar ? 'bg-orange-600 hover:bg-orange-700 text-white' : 'bg-primary hover:bg-primary/90'}
-                  ${isReturnMode ? 'bg-destructive hover:bg-destructive/90' : ''}
-                `}
-                disabled={cart.length === 0 || isProcessing}
-                onClick={completeSale}
-              >
-                 <span className="mr-2">{isProcessing ? "Processing..." : isReturnMode ? "REFUND" : isUdhaar ? "CREDIT" : "PAY"}</span>
-                 {!isProcessing && <CreditCard className="h-5 w-5 opacity-80" />}
-              </Button>
-           </div>
+                <Button size="lg" className="w-full font-bold text-lg" onClick={completeSale} disabled={isProcessing}>
+                    Pay ₹{finalTotal.toFixed(0)}
+                </Button>
+            </div>
         </div>
 
       </div>
