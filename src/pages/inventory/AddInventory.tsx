@@ -1,4 +1,4 @@
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -11,16 +11,21 @@ import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { supabase, Item } from "@/lib/supabase";
-import { Printer, Plus, RotateCcw, Image as ImageIcon, UploadCloud, X } from "lucide-react";
+import { Printer, Plus, RotateCcw, UploadCloud, X, Layers } from "lucide-react";
 import { Capacitor } from "@capacitor/core";
 import { BluetoothSerial } from "@awesome-cordova-plugins/bluetooth-serial";
-import { Toast } from '@capacitor/toast';
 
+
+
+// Updated Schema with Category and Dynamic Size Fields
 const formSchema = z.object({
   item_name: z.string().min(1, "Item name is required"),
   make: z.string().min(1, "Make is required"),
   brand_name: z.string().min(1, "Brand name is required"),
-  size: z.string().default('M'),
+  category: z.string().optional(),
+  size: z.string().optional(),
+  dimension_value: z.string().optional(),
+  custom_unit: z.string().optional(),
   purchase_price: z.coerce.number().min(0, "Must be positive"),
   selling_price: z.coerce.number().min(0, "Must be positive"),
   is_pack: z.boolean().default(false),
@@ -60,7 +65,6 @@ function generateItemCode(): string {
   return code;
 }
 
-// --- NEW: Client-side Image Compression ---
 const compressImage = (file: File): Promise<Blob> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -73,7 +77,6 @@ const compressImage = (file: File): Promise<Blob> => {
         const MAX_WIDTH = 800;
         const scaleSize = MAX_WIDTH / img.width;
         
-        // Only scale down if image is larger than MAX_WIDTH
         if (scaleSize < 1) {
           canvas.width = MAX_WIDTH;
           canvas.height = img.height * scaleSize;
@@ -85,7 +88,6 @@ const compressImage = (file: File): Promise<Blob> => {
         const ctx = canvas.getContext("2d");
         ctx?.drawImage(img, 0, 0, canvas.width, canvas.height);
         
-        // Output as JPEG at 70% quality
         canvas.toBlob((blob) => {
           if (blob) resolve(blob);
           else reject(new Error("Canvas to Blob failed"));
@@ -98,17 +100,23 @@ const compressImage = (file: File): Promise<Blob> => {
 };
 
 export default function AddInventory() {
+  const [tenantName, setTenantName] = useState<string>("Biillo Systems");
   const [savedItem, setSavedItem] = useState<Item | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [formData, setFormData] = useState<Partial<FormData>>({});
   
-  // --- NEW: Image State ---
+  // Image State
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   
+  // Category & Size States
+  const [categories, setCategories] = useState<{name: string}[]>([]);
+  const [isAddingCategory, setIsAddingCategory] = useState(false);
+  const [sizeMode, setSizeMode] = useState<'Standard' | 'Inches' | 'CMs' | 'Feet' | 'Custom'>('Standard');
+  
   const { toast } = useToast();
-  const sizes = ['XS', 'S', 'M', 'L', 'XL', 'XXL', '3XL', '4XL', '5XL', 'Free Size'];
+  const standardSizes = ['XS', 'S', 'M', 'L', 'XL', 'XXL', '3XL', '4XL', '5XL', 'Free Size'];
 
   const {
     register,
@@ -136,7 +144,33 @@ export default function AddInventory() {
   const piecesPerBox = useWatch({ control, name: 'pieces_per_box' }) || 1;
   const numberOfBoxes = useWatch({ control, name: 'number_of_boxes' }) || 0;
   
-  React.useEffect(() => {
+  // Fetch Unique Categories from existing items on Mount
+  useEffect(() => {
+    const fetchData = async () => {
+      // 1. Fetch Categories
+      const { data: catData } = await supabase.from('items').select('category').not('category', 'is', null);
+      if (catData) {
+          const uniqueCategories = Array.from(new Set(catData.map(item => item.category)));
+          setCategories(uniqueCategories.map(cat => ({ name: cat })));
+      }
+  
+      // 2. Fetch Tenant Name
+      // We use the tenant_id that should be available via your auth session or profile
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+          const { data: tenantData } = await supabase
+              .from('tenants')
+              .select('tenant_name')
+              .eq('id', user.app_metadata.tenant_id) // Adjust this path based on your auth structure
+              .single();
+              
+          if (tenantData) setTenantName(tenantData.tenant_name);
+      }
+    };
+    fetchData();
+  }, []);
+
+  useEffect(() => {
     if (isPack) {
       const totalQuantity = numberOfBoxes * piecesPerBox;
       setValue('quantity', totalQuantity, { shouldValidate: true });
@@ -164,11 +198,15 @@ export default function AddInventory() {
     setFormData({});
     setSavedItem(null);
     removeImage();
+    setSizeMode('Standard');
     reset({
       item_name: '',
       make: '',
       brand_name: '',
+      category: '',
       size: 'M',
+      dimension_value: '',
+      custom_unit: '',
       purchase_price: 0,
       selling_price: 0,
       supplier_code: '',
@@ -188,7 +226,15 @@ export default function AddInventory() {
       const piecesPerBox = isPack ? (data.pieces_per_box || 1) : 1;
       const numBoxes = isPack ? (data.number_of_boxes || 0) : 0;
       
-      const { quantity, pieces_per_box, number_of_boxes, is_pack, ...persistentData } = data;
+      // Process Size Based on Mode
+      let finalSize = data.size || 'STD';
+      if (sizeMode === 'Inches') finalSize = `${data.dimension_value} inches`;
+      else if (sizeMode === 'CMs') finalSize = `${data.dimension_value} cms`;
+      else if (sizeMode === 'Feet') finalSize = `${data.dimension_value} ft`;
+      else if (sizeMode === 'Custom') finalSize = `${data.dimension_value} ${data.custom_unit}`;
+
+      // Extract transient data so we don't save it to local state for the next form reset
+      const { quantity, pieces_per_box, number_of_boxes, is_pack, dimension_value, custom_unit, ...persistentData } = data;
       setFormData(persistentData);
       
       const totalQuantity = isPack 
@@ -199,7 +245,7 @@ export default function AddInventory() {
         ? data.price_per_piece 
         : data.selling_price;
 
-      // --- NEW: Handle Image Upload ---
+      // Handle Image Upload
       let uploadedImageUrl = null;
       if (imageFile) {
         toast({ title: "Compressing image..." });
@@ -222,6 +268,7 @@ export default function AddInventory() {
         uploadedImageUrl = publicUrlData.publicUrl;
       }
       
+      // Insert into Database (Assumes you added a 'category' column to your items table)
       const { data: item, error } = await supabase
         .from("items")
         .insert({
@@ -229,14 +276,15 @@ export default function AddInventory() {
           item_name: data.item_name,
           make: data.make,
           brand_name: data.brand_name,
-          size: data.size,
+          category: data.category || null,
+          size: finalSize,
           purchase_price: data.purchase_price,
           selling_price: data.selling_price,
           price_per_piece: price_per_piece,
           supplier_code: data.supplier_code,
           quantity: totalQuantity,
           pieces_per_box: isPack ? piecesPerBox : 1,
-          image_url: uploadedImageUrl, // Append URL here
+          image_url: uploadedImageUrl,
         })
         .select()
         .single();
@@ -246,10 +294,9 @@ export default function AddInventory() {
       setSavedItem(item);
       toast({
         title: "Item Added",
-        description: `Code: ${itemCode}`,
+        description: `Code: ${itemCode} | Size: ${finalSize}`,
       });
       
-      // Keep form data but clear image for next item
       removeImage();
       
     } catch (error: any) {
@@ -375,52 +422,56 @@ export default function AddInventory() {
 
   return (
     <AppLayout>
-      <div className="max-w-4xl mx-auto space-y-6 animate-fade-in print:hidden">
+      {/* max-w-7xl makes it span wider on desktop screens */}
+      <div className="max-w-7xl mx-auto space-y-6 sm:space-y-8 animate-fade-in print:hidden pb-12">
+        
         <div>
-          <h1 className="text-2xl font-bold text-foreground">Add New Stock</h1>
-          <p className="text-muted-foreground">Register new items, upload photos & print barcode labels</p>
+          <h1 className="text-2xl sm:text-3xl font-bold text-foreground">Add New Stock</h1>
+          <p className="text-muted-foreground mt-1">Register new items, upload photos & print barcode labels</p>
         </div>
 
-        <div className="grid gap-6 lg:grid-cols-2">
-          <Card>
-            <CardHeader>
-              <div className="flex justify-between items-start">
-                <div>
-                  <CardTitle className="flex items-center gap-2">
-                    <Plus className="h-5 w-5" />
-                    Item Details
-                  </CardTitle>
-                </div>
+        {/* 12-column grid to allow the form to stretch across 8 columns and the barcode on 4 */}
+        <div className="grid gap-6 lg:grid-cols-12 items-start">
+          
+          <Card className="lg:col-span-8 shadow-sm">
+            <CardHeader className="border-b bg-muted/10 pb-4">
+              <div className="flex justify-between items-center">
+                <CardTitle className="flex items-center gap-2 text-lg">
+                  <Layers className="h-5 w-5 text-primary" />
+                  Inventory Details
+                </CardTitle>
                 <Button type="button" variant="outline" size="sm" onClick={handleClearForm}>
                    <RotateCcw className="h-4 w-4 mr-1"/> Reset
                 </Button>
               </div>
             </CardHeader>
-            <CardContent>
-              <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+            <CardContent className="pt-6">
+              <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
                 
-                {/* --- NEW: Image Upload Field --- */}
-                <div className="space-y-2 border-2 border-dashed rounded-lg p-4 text-center hover:bg-muted/50 transition-colors">
+                {/* Image Upload Area */}
+                <div className="space-y-2 border-2 border-dashed rounded-xl p-6 text-center hover:bg-muted/30 transition-colors bg-muted/10">
                   <Label htmlFor="image" className="cursor-pointer block">
                     {imagePreview ? (
-                      <div className="relative inline-block">
+                      <div className="relative inline-block group">
                         <img 
                           src={imagePreview} 
                           alt="Preview" 
-                          className="h-32 w-32 object-cover rounded-md shadow-sm border"
+                          className="h-40 w-40 object-cover rounded-xl shadow-sm border-2 border-primary/20"
                         />
                         <button
                           type="button"
                           onClick={(e) => { e.preventDefault(); removeImage(); }}
-                          className="absolute -top-2 -right-2 bg-destructive text-destructive-foreground rounded-full p-1 shadow-md hover:bg-destructive/90"
+                          className="absolute -top-3 -right-3 bg-destructive text-destructive-foreground rounded-full p-1.5 shadow-lg hover:bg-destructive/90 transition-transform hover:scale-110"
                         >
                           <X className="h-4 w-4" />
                         </button>
                       </div>
                     ) : (
-                      <div className="flex flex-col items-center gap-2 text-muted-foreground">
-                        <UploadCloud className="h-8 w-8 mb-1" />
-                        <span className="text-sm font-medium text-foreground">Click to upload image</span>
+                      <div className="flex flex-col items-center gap-2 text-muted-foreground py-4">
+                        <div className="p-3 bg-background rounded-full shadow-sm mb-2">
+                          <UploadCloud className="h-6 w-6 text-primary" />
+                        </div>
+                        <span className="text-sm font-semibold text-foreground">Tap to upload product image</span>
                         <span className="text-xs">JPEG, PNG, WEBP (Auto-compressed)</span>
                       </div>
                     )}
@@ -435,50 +486,154 @@ export default function AddInventory() {
                   />
                 </div>
 
+                {/* Main Item Details (Wider Grid) */}
                 <div className="space-y-2">
                   <Label htmlFor="item_name">Item Name</Label>
-                  <Input id="item_name" {...register("item_name")} placeholder="e.g., Saree" />
+                  <Input id="item_name" className="h-12 md:h-10 text-base md:text-sm" {...register("item_name")} placeholder="e.g., Handcrafted Ganpati Idol" />
                   {errors.item_name && <p className="text-sm text-destructive">{errors.item_name.message}</p>}
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="make">Make</Label>
-                    <Input id="make" {...register("make")} />
+                    <Input id="make" className="h-12 md:h-10" {...register("make")} placeholder="e.g., Shadu Mati" />
                     {errors.make && <p className="text-sm text-destructive">{errors.make.message}</p>}
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="brand_name">Brand Name</Label>
-                    <Input id="brand_name" {...register("brand_name")} />
+                    <Input id="brand_name" className="h-12 md:h-10" {...register("brand_name")} placeholder="e.g., Bappa Murti Art" />
                     {errors.brand_name && <p className="text-sm text-destructive">{errors.brand_name.message}</p>}
                   </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
+                  {/* Category Field with "Add New" Toggle */}
                   <div className="space-y-2">
-                    <Label htmlFor="size">Size</Label>
-                    <select id="size" {...register("size")} className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
-                      {sizes.map(size => <option key={size} value={size}>{size}</option>)}
+                    <Label htmlFor="category">Category</Label>
+                    <div className="flex items-center gap-2">
+                      {isAddingCategory ? (
+                        <>
+                          <Input 
+                            id="category" 
+                            className="h-12 md:h-10 flex-1 border-primary/50 focus-visible:ring-primary" 
+                            {...register("category")} 
+                            placeholder="Type new category name..." 
+                            autoFocus
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            className="h-12 w-12 md:h-10 md:w-10 shrink-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                            onClick={() => {
+                              setIsAddingCategory(false);
+                              setValue('category', ''); // Clear the typed text if they cancel
+                            }}
+                            title="Cancel adding new category"
+                          >
+                            <X className="h-5 w-5" />
+                          </Button>
+                        </>
+                      ) : (
+                        <>
+                          <select 
+                            id="category" 
+                            {...register("category")} 
+                            className="flex h-12 md:h-10 w-full flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                          >
+                            <option value="">Select Category...</option>
+                            {categories.map((cat, index) => (
+                              <option key={index} value={cat.name}>{cat.name}</option>
+                            ))}
+                          </select>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            className="h-12 w-12 md:h-10 md:w-10 shrink-0 text-primary border-primary/20 hover:bg-primary/10 transition-colors"
+                            onClick={() => {
+                              setIsAddingCategory(true);
+                              setValue('category', ''); // Clear the select value so they can type fresh
+                            }}
+                            title="Add a brand new category"
+                          >
+                            <Plus className="h-5 w-5" />
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  </div>
+
+                {/* Dynamic Size Engine */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-muted/20 p-4 rounded-xl border">
+                  <div className="space-y-2">
+                    <Label htmlFor="sizeMode">Unit Format</Label>
+                    <select 
+                      id="sizeMode" 
+                      value={sizeMode}
+                      onChange={(e) => setSizeMode(e.target.value as any)}
+                      className="flex h-12 md:h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background"
+                    >
+                      <option value="Standard">Apparel (S, M, L)</option>
+                      <option value="Inches">Inches (in)</option>
+                      <option value="CMs">Centimeters (cm)</option>
+                      <option value="Feet">Feet (ft)</option>
+                      <option value="Custom">Custom Unit</option>
                     </select>
                   </div>
+
+                  {sizeMode === 'Standard' ? (
+                    <div className="space-y-2 md:col-span-2">
+                      <Label htmlFor="size">Select Size</Label>
+                      <select id="size" {...register("size")} className="flex h-12 md:h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+                        {standardSizes.map(size => <option key={size} value={size}>{size}</option>)}
+                      </select>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="space-y-2">
+                        <Label htmlFor="dimension_value">Size Value</Label>
+                        <Input id="dimension_value" className="h-12 md:h-10" {...register("dimension_value")} placeholder="e.g. 15, 2.5" />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="custom_unit">Unit Measure</Label>
+                        {sizeMode === 'Custom' ? (
+                          <Input id="custom_unit" className="h-12 md:h-10" {...register("custom_unit")} placeholder="e.g. Grams, Liters" />
+                        ) : (
+                          <Input className="h-12 md:h-10 bg-muted text-muted-foreground" disabled value={sizeMode} />
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* Pricing & Supply */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div className="space-y-2">
-                    <Label htmlFor="purchase_price">Purchase Price</Label>
-                    <Input id="purchase_price" type="number" step="0.01" {...register("purchase_price")} />
+                    <Label htmlFor="purchase_price">Purchase Price (₹)</Label>
+                    <Input id="purchase_price" className="h-12 md:h-10" type="number" step="0.01" {...register("purchase_price")} />
                     {errors.purchase_price && <p className="text-sm text-destructive">{errors.purchase_price.message}</p>}
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="selling_price" className="font-bold text-primary">Selling Price (₹)</Label>
+                    <Input id="selling_price" className="h-12 md:h-10 border-primary/50 focus-visible:ring-primary" type="number" step="0.01" {...register("selling_price")} />
+                    {errors.selling_price && <p className="text-sm text-destructive">{errors.selling_price.message}</p>}
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="supplier_code">Supplier Code</Label>
+                    <Input id="supplier_code" className="h-12 md:h-10" {...register("supplier_code")} />
+                    {errors.supplier_code && <p className="text-sm text-destructive">{errors.supplier_code.message}</p>}
                   </div>
                 </div>
 
-                <div className="space-y-2">
-                    <Label htmlFor="selling_price">Selling Price (₹)</Label>
-                    <Input id="selling_price" type="number" step="0.01" {...register("selling_price")} />
-                    {errors.selling_price && <p className="text-sm text-destructive">{errors.selling_price.message}</p>}
-                </div>
-
-                <div className="space-y-4 border rounded-lg p-4 bg-muted/20">
+                {/* Packaging Logic */}
+                <div className="space-y-4 border rounded-xl p-5 bg-card shadow-sm">
                   <div className="flex items-center justify-between">
-                    <Label htmlFor="is_pack">Pack Item?</Label>
+                    <div>
+                      <Label htmlFor="is_pack" className="text-base font-semibold">Is this a Box/Pack item?</Label>
+                      <p className="text-sm text-muted-foreground">Enable if selling in bulk packets</p>
+                    </div>
                     <Switch 
                       id="is_pack" 
+                      className="data-[state=checked]:bg-primary"
                       checked={isPack} 
                       onCheckedChange={(checked) => {
                         setValue('is_pack', checked);
@@ -495,105 +650,107 @@ export default function AddInventory() {
                   </div>
 
                   {isPack ? (
-                    <div className="space-y-3">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4 border-t">
                        <div className="space-y-2">
-                        <Label>Price Per Piece</Label>
-                        <Input type="number" step="0.01" {...register("price_per_piece")} />
-                        {errors.price_per_piece && <p className="text-sm text-destructive">{errors.price_per_piece.message}</p>}
+                         <Label>Price Per Piece (₹)</Label>
+                         <Input className="h-12 md:h-10" type="number" step="0.01" {...register("price_per_piece")} />
+                         {errors.price_per_piece && <p className="text-sm text-destructive">{errors.price_per_piece.message}</p>}
                        </div>
-                       <div className="grid grid-cols-2 gap-4">
-                         <div className="space-y-2">
-                            <Label>Pcs per Pack</Label>
-                            <Input type="number" {...register("pieces_per_box")} />
-                         </div>
-                         <div className="space-y-2">
-                            <Label>No. of Packs</Label>
-                            <Input type="number" {...register("number_of_boxes")} />
-                         </div>
+                       <div className="space-y-2">
+                          <Label>Pieces per Pack</Label>
+                          <Input className="h-12 md:h-10" type="number" {...register("pieces_per_box")} />
                        </div>
-                       <div className="text-sm text-muted-foreground pt-1">
-                          Total Qty: {numberOfBoxes * piecesPerBox} pieces
+                       <div className="space-y-2">
+                          <Label>Total Packs Adding</Label>
+                          <Input className="h-12 md:h-10" type="number" {...register("number_of_boxes")} />
+                       </div>
+                       <div className="md:col-span-3 text-sm font-semibold text-primary bg-primary/10 p-3 rounded-lg">
+                          Total Inventory Added: {numberOfBoxes * piecesPerBox} individual pieces
                        </div>
                     </div>
                   ) : (
-                    <div className="space-y-2">
-                      <Label htmlFor="quantity">Quantity</Label>
-                      <Input id="quantity" type="number" min="1" {...register("quantity")} />
+                    <div className="space-y-2 pt-4 border-t max-w-xs">
+                      <Label htmlFor="quantity">Quantity Adding to Stock</Label>
+                      <Input id="quantity" className="h-12 md:h-10" type="number" min="1" {...register("quantity")} />
                     </div>
                   )}
-                  <div className="space-y-2">
-                    <Label htmlFor="supplier_code">Supplier Code</Label>
-                    <Input id="supplier_code" {...register("supplier_code")} />
-                    {errors.supplier_code && <p className="text-sm text-destructive">{errors.supplier_code.message}</p>}
-                  </div>
                 </div>
 
-                <Button type="submit" className="w-full" disabled={isLoading}>
-                  {isLoading ? "Saving..." : "Save Item"}
+                <Button type="submit" className="w-full h-12 md:h-12 text-base font-bold shadow-md" disabled={isLoading}>
+                  {isLoading ? "Saving Inventory..." : "Save Item & Generate Barcode"}
                 </Button>
               </form>
             </CardContent>
           </Card>
 
-          {savedItem && (
-            <Card className="animate-fade-in border-green-200 bg-green-50/20">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Printer className="h-5 w-5" /> Barcode Generated
-                </CardTitle>
-                <CardDescription>Code: {savedItem.item_code}</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-6">
-                
-                {/* NEW: Optional thumbnail preview on the success card */}
-                {savedItem.image_url && (
-                  <div className="flex justify-center mb-4">
-                    <img 
-                      src={savedItem.image_url} 
-                      alt="Uploaded item" 
-                      className="h-20 w-20 object-cover rounded-md border shadow-sm"
-                    />
-                  </div>
-                )}
-
-                <div className="flex justify-center">
-                    <div className="border border-gray-300 bg-white p-2 w-[220px] shadow-sm flex flex-col items-center text-center">
-                      <div className="font-bold text-sm">SAKHI COLLECTIONS</div>
-                      <div className="text-[10px] font-bold text-gray-800 uppercase mt-1">
-                        {savedItem.item_name}
-                      </div>
-                      <div className="text-[10px] text-gray-600">
-                         {savedItem.make} - {savedItem.brand_name} ({savedItem.size})
-                      </div>
-                      
-                      <div className="my-1 font-bold text-xl">₹{savedItem.selling_price}</div>
-                      
-                      <Barcode 
-                        value={savedItem.item_code} 
-                        height={30} 
-                        width={1.5} 
-                        fontSize={12} 
-                        displayValue={true}
-                        margin={0}
+          {/* Barcode Success Card */}
+          <div className="lg:col-span-4 sticky top-6">
+            {savedItem ? (
+              <Card className="animate-fade-in border-green-200 bg-green-50 shadow-md">
+                <CardHeader className="pb-4">
+                  <CardTitle className="flex items-center gap-2 text-green-700 text-lg">
+                    <Printer className="h-5 w-5" /> Barcode Generated
+                  </CardTitle>
+                  <CardDescription className="font-mono text-green-800">Code: {savedItem.item_code}</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  
+                  {savedItem.image_url && (
+                    <div className="flex justify-center mb-4">
+                      <img 
+                        src={savedItem.image_url} 
+                        alt="Uploaded item" 
+                        className="h-28 w-28 object-cover rounded-xl border-4 border-white shadow-md"
                       />
                     </div>
-                </div>
+                  )}
 
-                <div className="text-center">
-                  <p className="text-sm text-muted-foreground mb-2">
-                    This will generate <strong>{savedItem.quantity}</strong> labels.
-                  </p>
-                  <Button onClick={handlePrint} className="w-full" size="lg">
-                    <Printer className="mr-2 h-4 w-4" />
-                    Print Labels
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          )}
+                  <div className="flex justify-center">
+                      <div className="border border-gray-300 bg-white p-3 w-[240px] shadow-sm flex flex-col items-center text-center rounded-lg">
+                      <div className="font-medium text-xs tracking-wider">{tenantName}</div>
+                        <div className="text-xs font-bold text-gray-800 uppercase mt-2 leading-tight line-clamp-2">
+                          {savedItem.item_name}
+                        </div>
+                        <div className="text-[11px] text-gray-600 mt-1">
+                           {savedItem.make} - {savedItem.brand_name} <br/> ({savedItem.size})
+                        </div>
+                        
+                        <div className="my-2 font-black text-2xl text-black">₹{savedItem.selling_price}</div>
+                        
+                        <Barcode 
+                          value={savedItem.item_code} 
+                          height={35} 
+                          width={1.6} 
+                          fontSize={12} 
+                          displayValue={true}
+                          margin={0}
+                        />
+                      </div>
+                  </div>
+
+                  <div className="text-center pt-2">
+                    <p className="text-sm text-green-800 mb-3 font-medium">
+                      This will print <strong>{savedItem.quantity}</strong> adhesive labels.
+                    </p>
+                    <Button onClick={handlePrint} className="w-full h-12 bg-green-600 hover:bg-green-700 text-white shadow-md" size="lg">
+                      <Printer className="mr-2 h-5 w-5" />
+                      Print Labels Now
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="hidden lg:flex flex-col items-center justify-center p-8 border-2 border-dashed rounded-xl h-[300px] text-muted-foreground bg-muted/10">
+                <Printer className="h-10 w-10 mb-3 text-muted-foreground/50" />
+                <p className="text-center font-medium">Save an item to generate<br/>and preview its barcode label.</p>
+              </div>
+            )}
+          </div>
+
         </div>
       </div>
 
+      {/* Hidden Print Wrapper */}
       {savedItem && (
         <div id="printable-labels" className="hidden print:block">
           <style type="text/css" media="print">
@@ -615,7 +772,7 @@ export default function AddInventory() {
             {Array.from({ length: savedItem.pieces_per_box > 1 ? Math.ceil(savedItem.quantity / savedItem.pieces_per_box) : savedItem.quantity }).map((_, i) => (
               <div key={i} className="label-card border border-black bg-white p-2 flex flex-col items-center text-center h-[160px] justify-between break-inside-avoid">
                 <div className="w-full">
-                  <div className="font-bold text-sm text-black">SAKHI COLLECTIONS</div>
+                <div className="font-medium text-xs text-black">{tenantName}</div>
                   <div className="font-bold text-xs mt-1 truncate">{savedItem.item_name}</div>
                   <div className="text-[10px] text-gray-800">
                     {savedItem.make} {savedItem.brand_name ? `- ${savedItem.brand_name}` : ''}
