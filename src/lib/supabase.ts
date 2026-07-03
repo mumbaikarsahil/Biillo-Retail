@@ -41,6 +41,8 @@ export type Bill = {
   payment_status: 'paid' | 'pending'; // 'pending' = Udhaar
   payment_method: 'cash' | 'online' | 'udhaar';
   is_udhaar: boolean;
+  advance_paid?: number;
+  balance_due?: number;
 };
 
 export type BillItem = {

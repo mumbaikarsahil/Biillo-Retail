@@ -19,10 +19,10 @@ import {
   Laptop, 
   LogOut, 
   User as UserIcon,
-  Building2
+  Building2,
+  Settings2
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { Badge } from "@/components/ui/badge";
 import { AndroidPermissions } from "@awesome-cordova-plugins/android-permissions";
 import { Toast } from '@capacitor/toast';
 import { supabase } from "@/lib/supabase"; 
@@ -39,6 +39,7 @@ export default function SettingsPage() {
   const [storeName, setStoreName] = useState<string>("Loading...");
 
   const { toast: webToast } = useToast();
+  
   const showToast = async (props: { title: string; description?: string; variant?: "default" | "destructive"; duration?: number; className?: string }) => {
     if (Capacitor.isNativePlatform()) {
       await Toast.show({
@@ -174,156 +175,219 @@ export default function SettingsPage() {
 
   return (
     <AppLayout>
-      {/* Changed max-w-lg to max-w-5xl for a wider desktop container */}
-      <div className="p-4 max-w-5xl mx-auto space-y-6 pb-20">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
-          <p className="text-muted-foreground text-sm">Account & Hardware Configuration</p>
+      <div className="max-w-5xl mx-auto space-y-6 sm:space-y-8 animate-fade-in font-sans pb-24 md:pb-8">
+        
+        {/* --- HEADER --- */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight text-zinc-900">Settings</h1>
+            <p className="text-muted-foreground mt-0.5 text-sm font-medium">Account preferences and hardware configuration</p>
+          </div>
         </div>
 
-        {/* Responsive Grid: 1 Column on Mobile, 3 Columns on Desktop */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
           
-          {/* LEFT COLUMN: Profile & Preferences */}
+          {/* --- LEFT COLUMN: Profile & Preferences --- */}
           <div className="lg:col-span-1 space-y-6">
-            <Card className="border-0 shadow-md bg-white overflow-hidden rounded-2xl">
-              <div className="h-24 bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600"></div>
-              
-              <CardContent className="px-5 pb-5 pt-0 relative">
-                <div className="flex justify-between items-end -mt-10 mb-4">
-                  <div className="h-20 w-20 rounded-full border-4 border-white bg-slate-100 flex items-center justify-center text-3xl font-black text-slate-700 shadow-sm z-10">
-                    {profile?.full_name?.charAt(0).toUpperCase() || profile?.email?.charAt(0).toUpperCase() || <UserIcon size={32} />}
+            
+            {/* User Profile Card */}
+            <Card className="shadow-[0_1px_3px_rgba(0,0,0,0.02)] border border-zinc-200/80 bg-white rounded-2xl">
+              <CardContent className="p-6">
+                <div className="flex flex-col sm:flex-row lg:flex-col items-start sm:items-center lg:items-start justify-between gap-5">
+                  <div className="flex items-center gap-4">
+                    <div className="h-14 w-14 rounded-full border border-zinc-200/80 bg-zinc-50 flex items-center justify-center text-xl font-semibold text-zinc-700 shadow-sm shrink-0">
+                      {profile?.full_name?.charAt(0).toUpperCase() || profile?.email?.charAt(0).toUpperCase() || <UserIcon size={24} />}
+                    </div>
+                    <div>
+                      <h2 className="text-lg font-semibold text-zinc-900 tracking-tight leading-tight">
+                        {profile?.full_name || "Store Admin"}
+                      </h2>
+                      <p className="text-xs text-zinc-500 font-medium mt-0.5">{profile?.email}</p>
+                      
+                      <div className="flex flex-wrap items-center gap-2 mt-2.5">
+                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-zinc-100 text-zinc-600 border border-zinc-200/80 uppercase">
+                          <Building2 className="h-3 w-3" /> {storeName}
+                        </span>
+                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-semibold bg-zinc-100 text-zinc-600 border border-zinc-200/80 uppercase">
+                          {profile?.role || 'ADMIN'}
+                        </span>
+                      </div>
+                    </div>
                   </div>
+
                   <Button 
                     variant="outline" 
-                    size="sm" 
                     onClick={handleLogout} 
-                    className="rounded-full px-4 border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 z-10 font-bold"
+                    className="h-10 rounded-xl w-full sm:w-auto lg:w-full border-zinc-200/80 text-rose-600 hover:bg-rose-50 hover:text-rose-700 font-semibold shadow-sm"
                   >
-                    <LogOut className="h-4 w-4 mr-2" /> Log Out
+                    <LogOut className="h-4 w-4 mr-2" /> Log Out Session
                   </Button>
-                </div>
-
-                <div>
-                  <h2 className="text-xl font-bold text-slate-900 tracking-tight">
-                    {profile?.full_name || "Store Admin"}
-                  </h2>
-                  <p className="text-sm text-slate-500 font-medium">{profile?.email}</p>
-                </div>
-
-                <div className="flex flex-wrap gap-2 mt-4">
-                  <Badge variant="secondary" className="bg-indigo-50 text-indigo-700 px-3 py-1 flex items-center gap-1.5">
-                    <Building2 className="h-3 w-3" /> {storeName}
-                  </Badge>
-                  <Badge variant="secondary" className="bg-slate-100 text-slate-700 px-3 py-1">
-                    {profile?.role?.toUpperCase() || 'ADMIN'}
-                  </Badge>
                 </div>
               </CardContent>
             </Card>
 
-            <Card className="rounded-2xl border-slate-200 shadow-sm">
-               <CardHeader className="pb-2">
-                 <CardTitle className="text-sm font-bold text-slate-500 uppercase tracking-wider">Preferences</CardTitle>
+            {/* Application Preferences Card */}
+            <Card className="shadow-[0_1px_3px_rgba(0,0,0,0.02)] border border-zinc-200/80 bg-white rounded-2xl">
+               <CardHeader className="pb-4 pt-5 px-5">
+                 <CardTitle className="text-xs font-semibold text-zinc-500 uppercase tracking-wider flex items-center gap-2">
+                   <Settings2 className="h-4 w-4" /> Application Preferences
+                 </CardTitle>
                </CardHeader>
-               <CardContent className="space-y-4">
+               <CardContent className="px-5 pb-5 space-y-4">
                  <div className="flex items-center justify-between">
-                   <Label className="font-bold text-slate-700">Play Sound on Scan</Label>
-                   <Switch defaultChecked />
+                   <Label className="font-semibold text-sm text-zinc-700">Play Beep on Barcode Scan</Label>
+                   <Switch defaultChecked className="data-[state=checked]:bg-zinc-900" />
                  </div>
                </CardContent>
             </Card>
+
           </div>
 
-          {/* RIGHT COLUMN: Hardware / Printers */}
+          {/* --- RIGHT COLUMN: Hardware / Printers --- */}
           <div className="lg:col-span-2 space-y-6">
+            
             {isMobile ? (
-              <Card className="rounded-2xl border-slate-200 shadow-sm h-full">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
-                    <Bluetooth className="h-4 w-4" /> Bluetooth Printer
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className={`p-4 rounded-xl border flex items-center justify-between transition-colors ${connectedDevice?.type === 'bluetooth' ? 'bg-green-50 border-green-200' : 'bg-slate-50'}`}>
-                    <div className="flex items-center gap-3">
-                      <div className="h-10 w-10 bg-white shadow-sm border rounded-full flex items-center justify-center">
-                        <Printer className="h-5 w-5 text-slate-600" />
-                      </div>
-                      <div>
-                        <p className="font-bold text-sm text-slate-900">{connectedDevice?.type === 'bluetooth' ? connectedDevice.name : "Not Connected"}</p>
-                        <p className="text-xs text-slate-500">Tap scan to find devices</p>
-                      </div>
-                    </div>
-                  </div>
-                  <Separator />
-                  <div className="flex justify-between items-center">
-                    <Label className="font-bold text-slate-700">Paired Devices</Label>
-                    <Button size="sm" variant="secondary" className="rounded-full" onClick={scanBluetoothDevices} disabled={isScanning}>
-                      <RefreshCw className={`h-4 w-4 mr-2 ${isScanning ? 'animate-spin' : ''}`} />
-                      {isScanning ? 'Scanning...' : 'Scan'}
+              <Card className="shadow-[0_1px_3px_rgba(0,0,0,0.02)] border border-zinc-200/80 bg-white rounded-2xl h-full">
+                <CardHeader className="pb-4 pt-5 px-5 sm:px-6">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-xs font-semibold text-zinc-500 uppercase tracking-wider flex items-center gap-2">
+                      <Bluetooth className="h-4 w-4" /> Bluetooth Thermal Printer
+                    </CardTitle>
+                    <Button size="sm" variant="outline" className="h-8 rounded-lg text-xs font-semibold border-zinc-200/80 shadow-sm" onClick={scanBluetoothDevices} disabled={isScanning}>
+                      <RefreshCw className={`h-3 w-3 mr-1.5 ${isScanning ? 'animate-spin' : ''}`} />
+                      {isScanning ? 'Scanning...' : 'Scan Devices'}
                     </Button>
                   </div>
-                  <div className="space-y-2">
-                    {devices.map((device, idx) => (
-                      <div key={idx} className="flex items-center justify-between p-3 border rounded-xl bg-white hover:bg-slate-50 transition-colors">
-                        <span className="text-sm font-bold text-slate-700">{device.name}</span>
-                        <Button size="sm" variant="outline" className="rounded-full" onClick={() => connectBluetooth(device)}>Connect</Button>
+                </CardHeader>
+                
+                <CardContent className="px-5 sm:px-6 pb-6 space-y-6">
+                  
+                  {/* Connected Device Status Bar */}
+                  <div className="p-4 rounded-xl border border-zinc-200/80 bg-zinc-50/50 flex items-center justify-between shadow-sm">
+                    <div className="flex items-center gap-3">
+                      <div className="h-10 w-10 bg-white shadow-sm border border-zinc-200/80 rounded-full flex items-center justify-center shrink-0">
+                        <Printer className="h-4 w-4 text-zinc-600" />
                       </div>
-                    ))}
+                      <div>
+                        <p className="font-semibold text-sm text-zinc-900">
+                          {connectedDevice?.type === 'bluetooth' ? connectedDevice.name : "No Printer Connected"}
+                        </p>
+                        <p className="text-xs text-zinc-500 font-medium mt-0.5">Active hardware output</p>
+                      </div>
+                    </div>
+                    {connectedDevice?.type === 'bluetooth' && (
+                      <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)] mr-1" />
+                    )}
                   </div>
+
+                  <div className="space-y-3">
+                    <Label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Available Paired Devices</Label>
+                    
+                    {devices.length === 0 ? (
+                       <div className="text-center py-8 text-xs text-zinc-400 font-medium border border-dashed border-zinc-200/80 rounded-xl bg-zinc-50/50">
+                         No devices found. Ensure printer is paired in Android Settings.
+                       </div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {devices.map((device, idx) => (
+                          <div key={idx} className="flex items-center justify-between p-3.5 border border-zinc-200/80 rounded-xl bg-white hover:bg-zinc-50 transition-colors shadow-sm">
+                            <span className="text-sm font-semibold text-zinc-700 truncate pr-2">{device.name}</span>
+                            <Button 
+                              size="sm" 
+                              variant="outline" 
+                              className="h-8 rounded-lg text-xs font-semibold bg-white border-zinc-200/80 hover:bg-zinc-100 hover:text-zinc-900 shrink-0" 
+                              onClick={() => connectBluetooth(device)}
+                            >
+                              Connect
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
                 </CardContent>
               </Card>
+
             ) : (
-              <Card className="rounded-2xl border-slate-200 shadow-sm h-full">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-bold text-blue-600 uppercase tracking-wider flex items-center gap-2">
-                    <Monitor className="h-4 w-4" /> System Printers
-                  </CardTitle>
+
+              /* Desktop / Electron Printer View */
+              <Card className="shadow-[0_1px_3px_rgba(0,0,0,0.02)] border border-zinc-200/80 bg-white rounded-2xl h-full">
+                <CardHeader className="pb-4 pt-5 px-5 sm:px-6">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-xs font-semibold text-zinc-500 uppercase tracking-wider flex items-center gap-2">
+                      <Monitor className="h-4 w-4" /> System Native Printers
+                    </CardTitle>
+                    <Button size="sm" variant="outline" className="h-8 rounded-lg text-xs font-semibold border-zinc-200/80 shadow-sm" onClick={loadWindowsPrinters}>
+                      <RefreshCw className="h-3 w-3 mr-1.5" /> Refresh List
+                    </Button>
+                  </div>
                 </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className={`p-4 rounded-xl border flex items-center gap-3 transition-colors ${connectedDevice?.type === 'windows' ? 'bg-blue-50 border-blue-200' : 'bg-slate-50'}`}>
-                     <div className="h-10 w-10 bg-white shadow-sm border rounded-full flex items-center justify-center">
-                        <Laptop className="h-5 w-5 text-blue-600" />
-                     </div>
-                     <div>
-                        <p className="font-bold text-sm text-slate-900">{connectedDevice?.type === 'windows' ? connectedDevice.name : "No Printer Selected"}</p>
-                        <p className="text-xs text-slate-500">Select a printer for silent printing</p>
-                     </div>
-                  </div>
 
-                  <div className="flex justify-between items-center pt-2">
-                     <Label className="font-bold text-slate-700">Available Printers</Label>
-                     <Button size="sm" variant="secondary" className="rounded-full" onClick={loadWindowsPrinters}>
-                        <RefreshCw className="h-4 w-4 mr-2"/> Refresh
-                     </Button>
-                  </div>
-
-                  <div className="space-y-2 max-h-[350px] overflow-y-auto">
-                    {winPrinters.length === 0 && (
-                       <div className="text-center py-6 text-xs text-muted-foreground border-2 border-dashed rounded-xl bg-slate-50">
-                          {(window as any).electronAPI ? "Click Refresh to load printers" : "Web Mode: Uses Default Browser Print Dialog"}
-                       </div>
-                    )}
-                    
-                    {winPrinters.map((p: any) => (
-                      <div key={p.name} className="flex items-center justify-between p-3 border rounded-xl bg-white hover:bg-slate-50 transition-colors">
-                        <div className="flex flex-col">
-                          <span className="font-bold text-sm text-slate-700">{p.name}</span>
-                          {p.isDefault && <span className="text-[10px] text-blue-500 font-bold uppercase mt-0.5">System Default</span>}
+                <CardContent className="px-5 sm:px-6 pb-6 space-y-6">
+                  
+                  {/* Connected Device Status Bar */}
+                  <div className="p-4 rounded-xl border border-zinc-200/80 bg-zinc-50/50 flex items-center justify-between shadow-sm">
+                     <div className="flex items-center gap-3">
+                        <div className="h-10 w-10 bg-white shadow-sm border border-zinc-200/80 rounded-full flex items-center justify-center shrink-0">
+                           <Laptop className="h-4 w-4 text-zinc-600" />
                         </div>
-                        {connectedDevice?.name === p.name ? (
-                           <Badge className="bg-blue-600 rounded-full px-3"><Check className="h-3 w-3 mr-1"/> Active</Badge>
-                        ) : (
-                           <Button size="sm" variant="outline" className="rounded-full" onClick={() => selectWindowsPrinter(p.name)}>Select</Button>
-                        )}
-                      </div>
-                    ))}
+                        <div>
+                           <p className="font-semibold text-sm text-zinc-900">
+                             {connectedDevice?.type === 'windows' ? connectedDevice.name : "Default System Print Dialog"}
+                           </p>
+                           <p className="text-xs text-zinc-500 font-medium mt-0.5">Select a printer below for silent background printing</p>
+                        </div>
+                     </div>
+                     {connectedDevice?.type === 'windows' && (
+                       <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)] mr-1" />
+                     )}
                   </div>
+
+                  <div className="space-y-3">
+                    <Label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Available OS Printers</Label>
+                    
+                    <div className="space-y-2.5 max-h-[400px] overflow-y-auto pr-1">
+                      {winPrinters.length === 0 && (
+                         <div className="text-center py-10 text-sm font-medium text-zinc-400 border border-dashed border-zinc-200/80 rounded-xl bg-zinc-50/50 flex flex-col items-center gap-2">
+                           <Monitor className="h-6 w-6 text-zinc-300" />
+                           {(window as any).electronAPI ? "Click Refresh to load system printers." : "Running in Web Mode: Uses standard browser print dialog."}
+                         </div>
+                      )}
+                      
+                      {winPrinters.map((p: any) => (
+                        <div key={p.name} className="flex items-center justify-between p-3.5 border border-zinc-200/80 rounded-xl bg-white hover:border-zinc-300 transition-colors shadow-sm">
+                          <div className="flex flex-col min-w-0 pr-4">
+                            <span className="font-semibold text-sm text-zinc-800 truncate leading-tight">{p.name}</span>
+                            {p.isDefault && (
+                              <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mt-1">System Default</span>
+                            )}
+                          </div>
+                          
+                          {connectedDevice?.name === p.name ? (
+                             <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-zinc-900 text-white shadow-sm shrink-0">
+                               <Check className="h-3.5 w-3.5" /> Active
+                             </span>
+                          ) : (
+                             <Button 
+                               size="sm" 
+                               variant="outline" 
+                               className="h-8 rounded-lg text-xs font-semibold bg-white border-zinc-200/80 hover:bg-zinc-100 hover:text-zinc-900 shrink-0" 
+                               onClick={() => selectWindowsPrinter(p.name)}
+                              >
+                                Select
+                             </Button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
                 </CardContent>
               </Card>
             )}
           </div>
+
         </div>
       </div>
     </AppLayout>

@@ -14,7 +14,7 @@ import {
   TrendingUp,
   AlertCircle,
   ShieldAlert,
-  ChevronRight
+  Lightbulb
 } from "lucide-react";
 
 // IMPORTANT: Match this exactly with the email you used in SuperAdmin.tsx
@@ -22,7 +22,7 @@ const SUPER_ADMIN_EMAIL = "mumbaikarsahill@gmail.com";
 
 const Index = () => {
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
-  const [userRole, setUserRole] = useState<string>("sales"); // Default to lowest privilege
+  const [userRole, setUserRole] = useState<string>("sales");
   const [userName, setUserName] = useState<string>("User");
   const [isLoading, setIsLoading] = useState(true);
 
@@ -58,13 +58,13 @@ const Index = () => {
     initializeUser();
   }, []);
 
-  // Define standard menu options with explicit role requirements
+  // App Launcher Options
   const baseMenuOptions = [
     { 
       href: "/billing", 
-      label: "Start Billing", 
+      label: "POS Billing", 
       icon: ShoppingCart, 
-      description: "Point of Sale",
+      description: "Checkout & Sales",
       allowedRoles: ["admin", "manager", "sales"],
       primary: true
     },
@@ -77,9 +77,9 @@ const Index = () => {
     },
     { 
       href: "/udhaar", 
-      label: "Udhaar Book", 
+      label: "Advance / Due", 
       icon: BookUser, 
-      description: "Manage credit",
+      description: "Pending ledgers",
       allowedRoles: ["admin", "manager"]
     },
     { 
@@ -93,26 +93,25 @@ const Index = () => {
       href: "/manage", 
       label: "Manage Stock", 
       icon: Boxes, 
-      description: "Edit & print barcodes",
+      description: "Edit & barcodes",
       allowedRoles: ["admin", "manager"]
     },
     { 
       href: "/analytics", 
       label: "Analytics", 
       icon: BarChart3, 
-      description: "Performance metrics",
+      description: "Store metrics",
       allowedRoles: ["admin", "manager"]
     },
     { 
       href: "/settings", 
       label: "Settings", 
       icon: Settings, 
-      description: "Hardware & app config",
+      description: "App config",
       allowedRoles: ["admin", "manager"]
     },
   ];
 
-  // Filter menu based on user role
   let visibleMenu = baseMenuOptions.filter(option => option.allowedRoles.includes(userRole));
 
   // Inject God Mode if Super Admin
@@ -121,7 +120,7 @@ const Index = () => {
       href: "/super-admin-secret",
       label: "God Mode",
       icon: ShieldAlert,
-      description: "Provision Clients",
+      description: "Client config",
       allowedRoles: ["admin"],
       primary: false
     });
@@ -130,8 +129,11 @@ const Index = () => {
   if (isLoading) {
     return (
       <AppLayout>
-        <div className="h-screen flex items-center justify-center">
-          <p className="text-zinc-400 font-medium text-sm">Loading workspace...</p>
+        <div className="h-[calc(100vh-4rem)] flex items-center justify-center">
+          <div className="flex flex-col items-center gap-3">
+            <div className="animate-spin rounded-full h-6 w-6 border-2 border-zinc-900 border-t-transparent" />
+            <p className="text-zinc-500 font-medium text-sm">Loading workspace...</p>
+          </div>
         </div>
       </AppLayout>
     );
@@ -139,92 +141,89 @@ const Index = () => {
 
   return (
     <AppLayout>
-      <div className="space-y-6 pb-24 lg:pb-8 px-2 sm:px-4 max-w-6xl mx-auto pt-2 lg:pt-6 animate-in fade-in duration-300">
+      <div className="pb-24 lg:pb-8 px-4 sm:px-6 max-w-5xl mx-auto pt-4 sm:pt-8 animate-in fade-in duration-300 font-sans">
         
-        {/* Vercel-style Header */}
-        <div className="flex flex-col space-y-1.5 mb-8 border-b border-zinc-200 pb-6">
-          <h1 className="text-2xl lg:text-3xl font-semibold tracking-tight text-zinc-900">
+        {/* --- HEADER --- */}
+        <div className="flex flex-col space-y-1 mb-6 sm:mb-8">
+          <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight text-zinc-900">
             Welcome back, {userName.split(' ')[0]}
           </h1>
           <p className="text-sm font-medium text-zinc-500">
-            Select an action below to manage your store operations.
+            Select an app module to manage your store.
           </p>
         </div>
 
-        {/* Connection Status */}
+        {/* --- ALERTS --- */}
         {!isSupabaseConfigured && (
-          <Alert variant="destructive" className="py-3 border-red-200 bg-red-50 text-red-900 rounded-md">
+          <Alert variant="destructive" className="mb-6 py-3 border-rose-200/80 bg-rose-50/50 text-rose-900 rounded-xl shadow-sm">
             <AlertCircle className="h-4 w-4" />
             <AlertTitle className="text-sm font-semibold ml-2">Database Disconnected</AlertTitle>
-            <AlertDescription className="text-xs ml-2 font-medium">
-              Please configure your Supabase URL and Anon Key in the environment variables.
+            <AlertDescription className="text-xs ml-2 font-medium mt-1 text-rose-700/80">
+              Please configure your Supabase URL and Anon Key in the environment variables to sync data.
             </AlertDescription>
           </Alert>
         )}
 
-        {/* LINEAR/VERCEL STYLE GRID */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+        {/* --- NATIVE APP GRID (2 Columns on Mobile) --- */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
           {visibleMenu.map((option, index) => {
             const isGodMode = option.label === "God Mode";
             
             return (
-              <Link key={index} to={option.href} className="group outline-none">
-                <Card className={`h-full transition-all duration-200 border rounded-lg shadow-sm 
+              <Link key={index} to={option.href} className="group outline-none block">
+                <Card className={`h-full aspect-square sm:aspect-auto sm:h-[140px] flex flex-col items-center justify-center text-center p-3 transition-all duration-200 rounded-2xl shadow-[0_1px_3px_rgba(0,0,0,0.02)] active:scale-95 
                   ${isGodMode 
-                    ? 'bg-red-50/30 border-red-200 hover:border-red-300 hover:bg-red-50/50' 
-                    : 'bg-white border-zinc-200 hover:border-zinc-300 hover:shadow-md'
+                    ? 'bg-rose-50/30 border-rose-200/80 hover:border-rose-300 hover:bg-rose-50/60' 
+                    : 'bg-white border-zinc-200/80 hover:border-zinc-300 hover:shadow-md'
                   }
-                  ${option.primary ? 'ring-1 ring-zinc-900/5' : ''}
                 `}>
-                  <CardContent className="flex flex-col items-start p-5 h-full relative overflow-hidden">
-                    
-                    {/* Top Row: Icon & Arrow */}
-                    <div className="flex items-center justify-between w-full mb-4">
-                      <div className={`h-10 w-10 rounded-md flex items-center justify-center border 
-                        ${isGodMode 
-                          ? 'bg-red-100 border-red-200 text-red-600' 
-                          : option.primary 
-                            ? 'bg-zinc-900 border-zinc-900 text-white' 
-                            : 'bg-zinc-50 border-zinc-200 text-zinc-600'
-                        }
-                      `}>
-                        <option.icon className="h-5 w-5" />
-                      </div>
-                      
-                      <ChevronRight className={`h-4 w-4 transition-transform duration-200 group-hover:translate-x-1 
-                        ${isGodMode ? 'text-red-300' : 'text-zinc-300 group-hover:text-zinc-600'}
-                      `} />
-                    </div>
-                    
-                    {/* Text Content */}
-                    <div className="mt-auto w-full">
-                      <h3 className={`font-semibold text-base tracking-tight mb-1
-                        ${isGodMode ? 'text-red-700' : 'text-zinc-900'}
-                      `}>
-                        {option.label}
-                      </h3>
-                      <p className={`text-xs font-medium
-                        ${isGodMode ? 'text-red-500/80' : 'text-zinc-500'}
-                      `}>
-                        {option.description}
-                      </p>
-                    </div>
-
-                  </CardContent>
+                  
+                  {/* Big App Icon Squircle */}
+                  <div className={`h-12 w-12 sm:h-14 sm:w-14 rounded-2xl flex items-center justify-center mb-3 sm:mb-4 transition-transform group-hover:-translate-y-1 shadow-sm border
+                    ${isGodMode 
+                      ? 'bg-rose-100 border-rose-200/80 text-rose-600' 
+                      : option.primary 
+                        ? 'bg-zinc-900 border-zinc-900 text-white shadow-md' 
+                        : 'bg-zinc-50 border-zinc-200/80 text-zinc-700'
+                    }
+                  `}>
+                    <option.icon className="h-6 w-6 sm:h-7 sm:w-7" />
+                  </div>
+                  
+                  {/* Labels */}
+                  <div className="w-full px-1">
+                    <h3 className={`font-semibold text-[13px] sm:text-sm tracking-tight leading-tight truncate mb-0.5
+                      ${isGodMode ? 'text-rose-700' : 'text-zinc-900'}
+                    `}>
+                      {option.label}
+                    </h3>
+                    <p className={`text-[10px] sm:text-[11px] font-medium truncate
+                      ${isGodMode ? 'text-rose-500/80' : 'text-zinc-500'}
+                    `}>
+                      {option.description}
+                    </p>
+                  </div>
+                  
                 </Card>
               </Link>
             );
           })}
         </div>
 
-        {/* Minimal Info Section */}
+        {/* --- IOS-STYLE WIDGET (Quick Tips) --- */}
         {userRole !== 'sales' && (
-          <div className="mt-8 bg-zinc-50 rounded-lg p-5 border border-zinc-200">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-500 mb-3">Quick Tips</h4>
-            <div className="grid sm:grid-cols-3 gap-4 text-sm font-medium text-zinc-600">
-              <p>• Use <strong className="text-zinc-900">Add Stock</strong> when receiving new shipments from suppliers.</p>
-              <p>• <strong className="text-zinc-900">Manage Stock</strong> allows you to quickly adjust quantities and print barcodes.</p>
-              <p>• Check <strong className="text-zinc-900">Analytics</strong> daily to monitor store performance and pending udhaar.</p>
+          <div className="mt-8 bg-zinc-50 rounded-2xl p-5 sm:p-6 border border-zinc-200/80 shadow-sm flex flex-col sm:flex-row gap-4 sm:items-start">
+            <div className="h-10 w-10 bg-white border border-zinc-200/80 rounded-xl flex items-center justify-center shrink-0 shadow-sm">
+              <Lightbulb className="h-5 w-5 text-amber-500" />
+            </div>
+            <div>
+              <h4 className="text-sm font-semibold text-zinc-900 tracking-tight mb-2">Workflow Tips</h4>
+              <div className="grid sm:grid-cols-2 gap-x-6 gap-y-2 text-xs font-medium text-zinc-500">
+                <p>• Use <strong className="text-zinc-800">Add Stock</strong> to register barcodes for new shipments.</p>
+                <p>• Use <strong className="text-zinc-800">Advance / Due</strong> to track and settle partial payments.</p>
+                <p>• <strong className="text-zinc-800">Manage Stock</strong> allows you to reprint labels instantly.</p>
+                <p>• Monitor <strong className="text-zinc-800">Analytics</strong> to gauge store performance.</p>
+              </div>
             </div>
           </div>
         )}

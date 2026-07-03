@@ -2,7 +2,6 @@ import { useState, useEffect } from "react";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Calendar } from "@/components/ui/calendar";
 import {
   Popover,
@@ -24,7 +23,10 @@ import {
   Banknote,
   AlertCircle,
   Clock,
-  ShoppingBag
+  ShoppingBag,
+  ArrowUpRight,
+  ArrowDownLeft,
+  Layers
 } from "lucide-react";
 import { format, isToday, isYesterday, addDays, subDays } from "date-fns";
 
@@ -32,8 +34,10 @@ type BillWithItems = {
   id: string;
   created_at: string;
   final_amount: number;
-  payment_method: 'cash' | 'online' | 'udhaar';
-  payment_status: 'paid' | 'pending';
+  advance_paid: number;
+  balance_due: number;
+  payment_method: 'cash' | 'online' | 'unpaid' | string;
+  payment_status: 'paid' | 'pending' | 'partially_paid';
   customer_name: string | null;
   items_count?: number;
   bill_items: {
@@ -50,11 +54,13 @@ export default function Sales() {
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [bills, setBills] = useState<BillWithItems[]>([]);
   const [loading, setLoading] = useState(true);
+  
   const [stats, setStats] = useState({
-    total: 0,
-    cash: 0,
-    online: 0,
-    udhaar: 0
+    grossRevenue: 0,
+    totalCollected: 0,
+    cashCollected: 0,
+    onlineCollected: 0,
+    pendingUdhaar: 0
   });
 
   // --- SECURE MULTI-TENANT INITIALIZATION ---
@@ -81,7 +87,6 @@ export default function Sales() {
     initializeTenantData();
   }, []);
 
-  // Fetch sales whenever the date OR the tenant ID changes
   useEffect(() => {
     if (currentTenantId) {
       fetchDailySales(currentTenantId);
@@ -91,14 +96,12 @@ export default function Sales() {
   const fetchDailySales = async (tenantId: string) => {
     setLoading(true);
     try {
-      // 1. Set Date Range (Start of day to End of day)
       const start = new Date(selectedDate);
       start.setHours(0, 0, 0, 0);
       
       const end = new Date(selectedDate);
       end.setHours(23, 59, 59, 999);
 
-      // 2. Fetch Bills with Items (STRICTLY ISOLATED BY TENANT)
       const { data, error } = await supabase
         .from('bills')
         .select(`
@@ -109,7 +112,7 @@ export default function Sales() {
             items ( item_name )
           )
         `)
-        .eq("tenant_id", tenantId) // <-- CRITICAL MULTI-TENANT FILTER
+        .eq("tenant_id", tenantId) 
         .gte('created_at', start.toISOString())
         .lte('created_at', end.toISOString())
         .order('created_at', { ascending: false });
@@ -134,23 +137,33 @@ export default function Sales() {
   const calculateStats = (data: BillWithItems[]) => {
     const newStats = data.reduce(
       (acc, bill) => {
-        const amount = Math.abs(bill.final_amount);
+        const isReturn = bill.final_amount < 0;
+        const gross = bill.final_amount; 
         
-        // Total Sales Volume
-        acc.total += amount;
+        acc.grossRevenue += gross;
 
-        // Split by Payment Method
-        if (bill.payment_status === 'pending') {
-          acc.udhaar += amount;
-        } else if (bill.payment_method === 'online') {
-          acc.online += amount;
-        } else {
-          // Default to cash if paid and not online
-          acc.cash += amount;
+        if (bill.payment_status === 'paid') {
+          acc.totalCollected += gross;
+          if (bill.payment_method === 'online') acc.onlineCollected += gross;
+          else acc.cashCollected += gross;
+          
+        } else if (bill.payment_status === 'partially_paid') {
+          const adv = isReturn ? -(bill.advance_paid || 0) : (bill.advance_paid || 0);
+          const bal = isReturn ? -(bill.balance_due || 0) : (bill.balance_due || 0);
+
+          acc.totalCollected += adv;
+          if (bill.payment_method === 'online') acc.onlineCollected += adv;
+          else acc.cashCollected += adv;
+
+          acc.pendingUdhaar += bal;
+
+        } else if (bill.payment_status === 'pending') {
+          acc.pendingUdhaar += gross;
         }
+
         return acc;
       },
-      { total: 0, cash: 0, online: 0, udhaar: 0 }
+      { grossRevenue: 0, totalCollected: 0, cashCollected: 0, onlineCollected: 0, pendingUdhaar: 0 }
     );
     setStats(newStats);
   };
@@ -163,179 +176,252 @@ export default function Sales() {
     }).format(amount);
   };
 
-  const getPaymentIcon = (method: string, status: string) => {
-    if (status === 'pending') return <AlertCircle className="h-4 w-4 text-orange-600" />;
-    if (method === 'online') return <CreditCard className="h-4 w-4 text-blue-600" />;
-    return <Banknote className="h-4 w-4 text-green-600" />;
-  };
-
-  const getPaymentLabel = (method: string, status: string) => {
-    if (status === 'pending') return "Udhaar";
-    if (method === 'online') return "Online";
-    return "Cash";
+  // Vercel / Linear inspired status pill with subtle indicator dot
+  const getStatusIndicator = (bill: BillWithItems) => {
+    if (bill.final_amount < 0) {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-zinc-100 text-zinc-700 border border-zinc-200/80">
+          <span className="w-1.5 h-1.5 rounded-full bg-rose-500" /> Refund
+        </span>
+      );
+    }
+    if (bill.payment_status === 'pending') {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-zinc-100 text-zinc-700 border border-zinc-200/80">
+          <span className="w-1.5 h-1.5 rounded-full bg-amber-500" /> Due
+        </span>
+      );
+    }
+    if (bill.payment_status === 'partially_paid') {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-zinc-100 text-zinc-700 border border-zinc-200/80">
+          <span className="w-1.5 h-1.5 rounded-full bg-blue-500" /> Advance
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-zinc-100 text-zinc-700 border border-zinc-200/80">
+        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> Paid
+      </span>
+    );
   };
 
   return (
     <AppLayout>
-      <div className="space-y-4 pb-20 md:pb-0 animate-fade-in">
+      <div className="space-y-6 pb-24 md:pb-8 animate-fade-in max-w-6xl mx-auto font-sans">
         
-        {/* --- DATE NAVIGATION HEADER --- */}
-        <div className="bg-background/95 backdrop-blur sticky top-0 z-10 -mx-4 px-4 py-2 border-b space-y-3 md:static md:border-0 md:p-0 md:mx-0">
-          <div className="flex items-center justify-between">
-            <h1 className="text-xl font-bold">Daily Sales</h1>
-            
-            <div className="flex items-center gap-2">
-              <Button 
-                variant="outline" 
-                size="icon" 
-                onClick={() => setSelectedDate(subDays(selectedDate, 1))}
-                className="h-8 w-8"
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </Button>
-              
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button variant="outline" className="h-8 font-normal min-w-[130px]">
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    {isToday(selectedDate) ? "Today" : 
-                     isYesterday(selectedDate) ? "Yesterday" : 
-                     format(selectedDate, "dd MMM yyyy")}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0" align="end">
-                  <Calendar
-                    mode="single"
-                    selected={selectedDate}
-                    onSelect={(date) => date && setSelectedDate(date)}
-                    initialFocus
-                  />
-                </PopoverContent>
-              </Popover>
-
-              <Button 
-                variant="outline" 
-                size="icon" 
-                onClick={() => setSelectedDate(addDays(selectedDate, 1))}
-                disabled={isToday(selectedDate)}
-                className="h-8 w-8"
-              >
-                <ChevronRight className="h-4 w-4" />
-              </Button>
-            </div>
+        {/* --- HEADER & APP-STYLE DATE TOOLBAR --- */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 sticky top-0 z-20 bg-zinc-50/80 backdrop-blur-md py-4 -mx-4 px-4 sm:static sm:bg-transparent sm:p-0 sm:mx-0 border-b border-zinc-200/60 sm:border-0">
+          <div>
+            <h1 className="text-xl sm:text-2xl font-semibold tracking-tight text-zinc-900">Sales & Ledger</h1>
+            <p className="text-muted-foreground mt-0.5 text-xs sm:text-sm font-medium">Real-time revenue, cashflow, and collection tracking</p>
           </div>
-
-          {/* --- DAILY SUMMARY STRIP --- */}
-          <div className="grid grid-cols-3 gap-2">
-            <Card className="bg-green-50/50 border-green-100 shadow-sm">
-              <CardContent className="p-2 text-center">
-                <span className="text-[10px] uppercase font-bold text-green-700/70">Cash</span>
-                <div className="text-sm font-bold text-green-700">{formatCurrency(stats.cash)}</div>
-              </CardContent>
-            </Card>
+          
+          <div className="flex items-center gap-1.5 bg-white p-1 rounded-xl border border-zinc-200/80 shadow-[0_1px_2px_rgba(0,0,0,0.03)] self-start sm:self-auto w-full sm:w-auto">
+            <Button 
+              variant="ghost" 
+              size="icon" 
+              onClick={() => setSelectedDate(subDays(selectedDate, 1))} 
+              className="h-9 w-9 rounded-lg hover:bg-zinc-100 text-zinc-600 shrink-0"
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
             
-            <Card className="bg-blue-50/50 border-blue-100 shadow-sm">
-              <CardContent className="p-2 text-center">
-                <span className="text-[10px] uppercase font-bold text-blue-700/70">Online</span>
-                <div className="text-sm font-bold text-blue-700">{formatCurrency(stats.online)}</div>
-              </CardContent>
-            </Card>
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="ghost" className="h-9 font-medium flex-1 sm:min-w-[150px] rounded-lg hover:bg-zinc-100 text-zinc-800 text-xs sm:text-sm">
+                  <CalendarIcon className="mr-2 h-3.5 w-3.5 text-zinc-400 shrink-0" />
+                  {isToday(selectedDate) ? "Today" : 
+                   isYesterday(selectedDate) ? "Yesterday" : 
+                   format(selectedDate, "dd MMM yyyy")}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-auto p-0 rounded-2xl border-zinc-200 shadow-xl" align="end">
+                <Calendar
+                  mode="single"
+                  selected={selectedDate}
+                  onSelect={(date) => date && setSelectedDate(date)}
+                  initialFocus
+                  className="rounded-2xl"
+                />
+              </PopoverContent>
+            </Popover>
 
-            <Card className="bg-orange-50/50 border-orange-100 shadow-sm">
-              <CardContent className="p-2 text-center">
-                <span className="text-[10px] uppercase font-bold text-orange-700/70">Udhaar</span>
-                <div className="text-sm font-bold text-orange-700">{formatCurrency(stats.udhaar)}</div>
-              </CardContent>
-            </Card>
+            <Button 
+              variant="ghost" 
+              size="icon" 
+              onClick={() => setSelectedDate(addDays(selectedDate, 1))} 
+              disabled={isToday(selectedDate)} 
+              className="h-9 w-9 rounded-lg hover:bg-zinc-100 text-zinc-600 shrink-0 disabled:opacity-30"
+            >
+              <ChevronRight className="h-4 w-4" />
+            </Button>
           </div>
         </div>
 
-        {/* --- TRANSACTIONS LIST --- */}
-        <div className="space-y-2">
+        {/* --- VERCEL / STRIPE MONOCHROME METRICS GRID --- */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+          
+          <Card className="shadow-[0_1px_3px_rgba(0,0,0,0.02)] border border-zinc-200/80 bg-white rounded-2xl">
+            <CardContent className="p-4 sm:p-5">
+              <div className="flex justify-between items-center mb-3">
+                <span className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">Gross Revenue</span>
+                <ArrowUpRight className="h-4 w-4 text-zinc-400" />
+              </div>
+              <div className="text-2xl sm:text-3xl font-semibold tracking-tight text-zinc-900">{formatCurrency(stats.grossRevenue)}</div>
+              <p className="text-xs font-medium text-zinc-400 mt-1.5">Total invoiced value</p>
+            </CardContent>
+          </Card>
+
+          <Card className="shadow-[0_1px_3px_rgba(0,0,0,0.02)] border border-zinc-200/80 bg-white rounded-2xl">
+            <CardContent className="p-4 sm:p-5">
+              <div className="flex justify-between items-center mb-3">
+                <span className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">Total Collected</span>
+                <span className="w-2 h-2 rounded-full bg-emerald-500" />
+              </div>
+              <div className="text-2xl sm:text-3xl font-semibold tracking-tight text-zinc-900">{formatCurrency(stats.totalCollected)}</div>
+              <div className="flex items-center gap-3 text-xs font-medium text-zinc-500 mt-2 pt-2 border-t border-zinc-100">
+                <span>Cash: <strong className="text-zinc-800 font-semibold">{formatCurrency(stats.cashCollected)}</strong></span>
+                <span>UPI: <strong className="text-zinc-800 font-semibold">{formatCurrency(stats.onlineCollected)}</strong></span>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="shadow-[0_1px_3px_rgba(0,0,0,0.02)] border border-zinc-200/80 bg-white rounded-2xl sm:col-span-2 lg:col-span-2">
+            <CardContent className="p-4 sm:p-5 flex flex-col justify-between h-full">
+              <div className="flex justify-between items-center mb-3">
+                <span className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">Pending Bookings / Due</span>
+                <span className="w-2 h-2 rounded-full bg-amber-500" />
+              </div>
+              <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-1 sm:gap-4 mt-auto">
+                <div className="text-2xl sm:text-3xl font-semibold tracking-tight text-zinc-900">{formatCurrency(stats.pendingUdhaar)}</div>
+                <div className="text-xs font-medium text-zinc-500">Unpaid invoices & remaining advance balances</div>
+              </div>
+            </CardContent>
+          </Card>
+
+        </div>
+
+        {/* --- NATIVE APP-LIKE TRANSACTION LEDGER --- */}
+        <div className="bg-white border border-zinc-200/80 shadow-[0_1px_3px_rgba(0,0,0,0.02)] rounded-2xl overflow-hidden">
+          
+          <div className="px-5 py-4 border-b border-zinc-100 flex justify-between items-center bg-zinc-50/40">
+             <div className="flex items-center gap-2">
+               <h2 className="text-sm font-semibold text-zinc-900">Transaction Ledger</h2>
+               <span className="px-2 py-0.5 text-[11px] font-semibold bg-zinc-200/60 text-zinc-700 rounded-full">{bills.length}</span>
+             </div>
+             <span className="text-xs font-medium text-zinc-400 hidden sm:inline">Tap any row to view breakdown</span>
+          </div>
+
           {loading ? (
-             <div className="text-center py-10 text-muted-foreground">Loading transactions...</div>
+             <div className="text-center py-20 text-zinc-400 font-medium text-sm flex flex-col items-center gap-3">
+               <div className="animate-spin rounded-full h-5 w-5 border-2 border-zinc-900 border-t-transparent" />
+               <span>Loading transaction ledger...</span>
+             </div>
           ) : bills.length === 0 ? (
-             <div className="text-center py-12 bg-muted/20 rounded-lg border border-dashed">
-               <ShoppingBag className="h-10 w-10 mx-auto text-muted-foreground/50 mb-2" />
-               <p className="text-muted-foreground">No sales recorded for this date</p>
+             <div className="text-center py-24 flex flex-col items-center px-4">
+               <div className="h-12 w-12 rounded-2xl bg-zinc-100 border border-zinc-200/80 flex items-center justify-center mb-3 text-zinc-400">
+                 <ShoppingBag className="h-5 w-5" />
+               </div>
+               <p className="text-zinc-900 font-semibold text-base">No transactions recorded</p>
+               <p className="text-zinc-500 text-xs sm:text-sm mt-1 max-w-sm">There is no sales activity or advance bookings logged for this date.</p>
              </div>
           ) : (
-            <div className="flex flex-col gap-2">
-              <div className="flex justify-between items-center px-1">
-                 <span className="text-xs font-medium text-muted-foreground">{bills.length} Transactions</span>
-                 <span className="text-xs font-bold text-primary">Total: {formatCurrency(stats.total)}</span>
-              </div>
-              
-              <Accordion type="single" collapsible className="space-y-2">
-                {bills.map((bill) => (
+            <Accordion type="single" collapsible className="w-full divide-y divide-zinc-100">
+              {bills.map((bill) => {
+                const isReturn = bill.final_amount < 0;
+                return (
                   <AccordionItem 
                     key={bill.id} 
                     value={bill.id} 
-                    className="border rounded-lg bg-card px-3 shadow-sm hover:bg-muted/10 transition-colors"
+                    className="border-0 px-4 sm:px-5 hover:bg-zinc-50/60 transition-colors"
                   >
-                    <AccordionTrigger className="hover:no-underline py-3">
-                      <div className="flex items-center justify-between w-full">
-                        <div className="flex items-center gap-3 text-left">
-                          {/* Payment Icon Badge */}
-                          <div className={`
-                            h-10 w-10 rounded-full flex items-center justify-center border
-                            ${bill.payment_status === 'pending' 
-                              ? 'bg-orange-50 border-orange-100' 
-                              : bill.payment_method === 'online' 
-                                ? 'bg-blue-50 border-blue-100' 
-                                : 'bg-green-50 border-green-100'}
+                    <AccordionTrigger className="hover:no-underline py-3.5 sm:py-4 group">
+                      <div className="flex items-center justify-between w-full pr-2 min-w-0">
+                        
+                        {/* Left Side: Icon, Customer Name & Time */}
+                        <div className="flex items-center gap-3 sm:gap-3.5 text-left min-w-0 flex-1 mr-3">
+                          <div className={`h-9 w-9 sm:h-10 sm:w-10 rounded-xl flex items-center justify-center shrink-0 border transition-colors
+                            ${isReturn ? 'bg-rose-50/50 border-rose-200/80 text-rose-600' : 'bg-zinc-50 border-zinc-200/80 text-zinc-700 group-hover:bg-white'}
                           `}>
-                            {getPaymentIcon(bill.payment_method, bill.payment_status)}
+                            {isReturn ? <ArrowDownLeft className="h-4 w-4" /> : <ShoppingBag className="h-4 w-4" />}
                           </div>
-                          
-                          <div>
-                            <div className="text-sm font-semibold flex items-center gap-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="text-sm font-semibold text-zinc-900 leading-snug truncate">
                               {bill.customer_name || "Walk-in Customer"}
-                              {bill.payment_status === 'pending' && (
-                                <Badge variant="outline" className="text-[10px] h-4 px-1 text-orange-600 bg-orange-50 border-orange-200">
-                                  Due
-                                </Badge>
-                              )}
                             </div>
-                            <div className="text-[11px] text-muted-foreground flex items-center gap-1">
-                              <Clock className="h-3 w-3" />
-                              {format(new Date(bill.created_at), "h:mm a")} • {bill.items_count} Items
+                            <div className="text-[11px] font-medium text-zinc-400 flex items-center gap-1.5 mt-0.5">
+                              <Clock className="h-3 w-3 shrink-0" />
+                              <span>{format(new Date(bill.created_at), "h:mm a")}</span>
+                              <span>•</span>
+                              <span>{bill.items_count} {bill.items_count === 1 ? 'item' : 'items'}</span>
                             </div>
                           </div>
                         </div>
 
-                        <div className="text-right pr-2">
-                          <div className="font-bold text-sm">
-                            {formatCurrency(Math.abs(bill.final_amount))}
+                        {/* Right Side: Amount & Monochrome Status Badge */}
+                        <div className="text-right flex flex-col items-end gap-1 shrink-0">
+                          <div className={`text-sm sm:text-base font-semibold tracking-tight ${isReturn ? 'text-rose-600' : 'text-zinc-900'}`}>
+                            {formatCurrency(bill.final_amount)}
                           </div>
-                          <div className="text-[10px] text-muted-foreground uppercase">
-                            {getPaymentLabel(bill.payment_method, bill.payment_status)}
-                          </div>
+                          {getStatusIndicator(bill)}
                         </div>
+
                       </div>
                     </AccordionTrigger>
                     
-                    <AccordionContent className="pb-3 pt-1 border-t mt-1">
-                      <div className="space-y-2 mt-2">
-                        {bill.bill_items.map((bi, idx) => (
-                          <div key={idx} className="flex justify-between text-xs">
-                            <span className="text-muted-foreground">
-                              {bi.items?.item_name || "Unknown Item"} 
-                              <span className="text-foreground font-medium ml-1">x{Math.abs(bi.quantity)}</span>
-                            </span>
-                            <span>₹{Math.abs(bi.quantity * bi.price_at_sale)}</span>
+                    <AccordionContent className="pb-4 pt-1">
+                      <div className="bg-zinc-50/80 border border-zinc-200/80 rounded-xl p-3.5 sm:p-4 sm:ml-13 space-y-3">
+                        
+                        {/* Advance / Partial Payment Split Breakdown */}
+                        {bill.payment_status === 'partially_paid' && (
+                          <div className="pb-3 border-b border-zinc-200/80 grid grid-cols-2 gap-3">
+                            <div className="bg-white p-2.5 rounded-lg border border-zinc-200/60 shadow-sm">
+                              <p className="text-[10px] uppercase tracking-wider font-semibold text-zinc-400 mb-0.5">Advance Collected</p>
+                              <div className="text-sm font-semibold text-zinc-900 flex items-center gap-1.5">
+                                {formatCurrency(bill.advance_paid)} 
+                                <span className="text-[10px] font-medium text-zinc-500 uppercase px-1.5 py-0.5 bg-zinc-100 rounded">
+                                  {bill.payment_method}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="bg-white p-2.5 rounded-lg border border-zinc-200/60 shadow-sm">
+                              <p className="text-[10px] uppercase tracking-wider font-semibold text-zinc-400 mb-0.5">Balance Pending</p>
+                              <div className="text-sm font-semibold text-amber-600">{formatCurrency(bill.balance_due)}</div>
+                            </div>
                           </div>
-                        ))}
-                        <div className="flex justify-between text-xs font-bold pt-2 border-t border-dashed">
-                          <span>Total</span>
-                          <span>{formatCurrency(Math.abs(bill.final_amount))}</span>
+                        )}
+
+                        {/* Standard Payment Mode Header */}
+                        {bill.payment_status !== 'partially_paid' && (
+                           <div className="pb-2.5 border-b border-zinc-200/60 flex justify-between items-center text-xs">
+                             <span className="font-medium text-zinc-500">Payment Method</span>
+                             <span className="font-semibold text-zinc-800 uppercase flex items-center gap-1.5 bg-white px-2 py-1 rounded-md border border-zinc-200/80 shadow-2xs">
+                               {bill.payment_method === 'online' ? <CreditCard className="h-3 w-3 text-zinc-500" /> : <Banknote className="h-3 w-3 text-zinc-500" />}
+                               {bill.payment_status === 'pending' ? 'Unpaid Due' : bill.payment_method}
+                             </span>
+                           </div>
+                        )}
+
+                        {/* Line Items List */}
+                        <div className="space-y-2 pt-0.5">
+                          {bill.bill_items.map((bi, idx) => (
+                            <div key={idx} className="flex justify-between items-baseline text-xs sm:text-sm">
+                              <div className="flex items-baseline gap-2 min-w-0 pr-2">
+                                <span className="font-semibold text-zinc-400 text-xs shrink-0">{Math.abs(bi.quantity)}×</span>
+                                <span className="font-medium text-zinc-800 truncate">{bi.items?.item_name || "Unknown Item"}</span>
+                              </div>
+                              <span className="font-semibold text-zinc-900 shrink-0 font-mono text-xs">₹{Math.abs(bi.quantity * bi.price_at_sale)}</span>
+                            </div>
+                          ))}
                         </div>
+
                       </div>
                     </AccordionContent>
                   </AccordionItem>
-                ))}
-              </Accordion>
-            </div>
+                );
+              })}
+            </Accordion>
           )}
         </div>
       </div>

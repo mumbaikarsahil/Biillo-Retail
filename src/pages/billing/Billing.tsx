@@ -47,7 +47,7 @@ export default function Billing() {
   const [viewMode, setViewMode] = useState<'scan' | 'payment'>('scan');
   
   const [paymentTab, setPaymentTab] = useState<"full" | "advance">("full");
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'online' | 'udhaar'>('cash');
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'online' | 'unpaid'>('cash');
   const [advanceAmount, setAdvanceAmount] = useState("");
   const [manualFinalAmount, setManualFinalAmount] = useState("");
   
@@ -107,7 +107,6 @@ export default function Billing() {
   const handlePhoneChange = async (val: string) => {
     setCustomerPhone(val);
     
-    // Only search if it looks like a valid number
     if (val.length >= 10 && currentTenantId) {
       try {
         const { data, error } = await supabase
@@ -117,11 +116,10 @@ export default function Billing() {
           .eq('tenant_id', currentTenantId)
           .not('customer_name', 'is', null)
           .order('created_at', { ascending: false })
-          .limit(1); // Fetch just 1 instead of forcing .single()
+          .limit(1);
 
         if (error) throw error;
 
-        // If we found a result, use it
         if (data && data.length > 0) {
           setCustomerName(data[0].customer_name);
           toast({ title: "Customer Found", description: `Autofilled: ${data[0].customer_name}` });
@@ -131,6 +129,7 @@ export default function Billing() {
       }
     }
   };
+
   // --- COMPUTATIONS ---
   const subtotal = cart.reduce((sum, item) => sum + item.selling_price * item.cartQuantity, 0);
   const finalTotal = manualFinalAmount === "" ? subtotal : parseFloat(manualFinalAmount);
@@ -150,7 +149,7 @@ export default function Billing() {
       const existing = prev.find((i) => i.id === item.id);
       const totalQty = existing ? existing.cartQuantity + quantity : quantity;
       if (!isReturnMode && totalQty > item.quantity) {
-        toast({ title: "Stock Limit", variant: "destructive" });
+        toast({ title: "Stock Limit Reached", variant: "destructive" });
         return prev;
       }
       if (existing) return prev.map((i) => i.id === item.id ? { ...i, cartQuantity: i.cartQuantity + quantity } : i);
@@ -164,7 +163,7 @@ export default function Billing() {
     setSearchTerm("");
     const { data: item } = await supabase.from("items").select("*").eq("item_code", itemCode.toUpperCase()).eq("tenant_id", currentTenantId).maybeSingle();
     if (item) handleAddToCart(item, 1);
-    else toast({ title: "Not Found", variant: "destructive" });
+    else toast({ title: "Item Not Found", variant: "destructive" });
   }, [currentTenantId, isReturnMode]);
 
   const updateQuantity = (itemId: string, delta: number) => {
@@ -185,7 +184,7 @@ export default function Billing() {
     setSearchTerm(""); setSelectedCategory("ALL"); setPaymentTab("full"); setPaymentMethod("cash");
   };
 
-  // --- CUSTOM ITEM LOGIC (FIXED) ---
+  // --- CUSTOM ITEM LOGIC ---
   const handleAddCustomItem = async () => {
     if (!customItemData.name || !customItemData.price || !currentTenantId) return;
     setIsProcessing(true);
@@ -193,7 +192,6 @@ export default function Billing() {
     try {
       const customCode = `CST-${Date.now().toString().slice(-6)}`;
       
-      // FIX: Added pieces_per_box: 1 to satisfy database requirements
       const { data: newItem, error } = await supabase.from('items').insert({
         tenant_id: currentTenantId,
         item_code: customCode,
@@ -217,15 +215,35 @@ export default function Billing() {
     }
   };
 
-  // --- CHECKOUT LOGIC ---
+  // =======================================================================
+  // REFACTORED CHECKOUT & ADVANCE PAYMENT LOGIC
+  // =======================================================================
   const completeSale = async () => {
     if (cart.length === 0) return;
     
-    const isAdvance = paymentTab === "advance";
-    const status = isAdvance || paymentMethod === 'udhaar' ? 'pending' : 'paid';
+    const isAdvanceMode = paymentTab === "advance";
     
-    if (status === 'pending' && (!customerName || !customerPhone)) {
-      toast({ title: "Details Required for Udhaar/Advance", variant: "destructive" }); return;
+    // Calculate the exact split between what is paid today vs balance due
+    const advPaid = isAdvanceMode 
+      ? parseFloat(advanceAmount || "0") 
+      : (paymentMethod === 'unpaid' ? 0 : finalTotal);
+      
+    const balDue = Math.max(0, finalTotal - advPaid);
+    
+    // Determine strict financial status
+    let status = 'paid';
+    if (balDue > 0) {
+      status = advPaid > 0 ? 'partially_paid' : 'pending';
+    }
+    
+    // Enforce customer details if any money is pending collection
+    if (status !== 'paid' && (!customerName || !customerPhone)) {
+      toast({ 
+        title: "Customer Details Required", 
+        description: "Please enter Customer Phone and Name to record advance booking or balance due.", 
+        variant: "destructive" 
+      }); 
+      return;
     }
 
     setIsProcessing(true);
@@ -234,11 +252,13 @@ export default function Billing() {
         total_amount: isReturnMode ? -subtotal : subtotal,
         discount_amount: isReturnMode ? 0 : Math.max(0, subtotal - finalTotal),
         final_amount: isReturnMode ? -finalTotal : finalTotal,
+        advance_paid: isReturnMode ? -advPaid : advPaid,     // Explicit advance recorded
+        balance_due: isReturnMode ? -balDue : balDue,         // Explicit balance recorded
         customer_phone: customerPhone || null,
         customer_name: customerName || null,
         payment_status: status,
         payment_method: paymentMethod, 
-        is_udhaar: status === 'pending'
+        is_udhaar: balDue > 0                                 // Backward compatibility flag
       }).select().single();
 
       if (billError) throw billError;
@@ -339,9 +359,9 @@ export default function Billing() {
 
   const shareOnWhatsApp = () => {
     if (!completedBill) return;
-    const PUBLIC_DOMAIN = "https://stock-buddy-drab.vercel.app"; 
-    const invoiceLink = `${PUBLIC_DOMAIN}/invoice/${completedBill.share_id}`;
-    const message = encodeURIComponent(`Thank you for shopping!\nAmount: ₹${Math.abs(completedBill.final_amount)}\nView Invoice: ${invoiceLink}`);
+    const PUBLIC_DOMAIN = "https://retail.biillo.com"; 
+    const invoiceLink = `${PUBLIC_DOMAIN}/#/invoice/${completedBill.share_id}`;
+    const message = encodeURIComponent(`Thank you for shopping!\nTotal Amount: ₹${Math.abs(completedBill.final_amount)}\nAdvance Paid: ₹${completedBill.advance_paid || 0}\nBalance Due: ₹${completedBill.balance_due || 0}\nView E-Receipt: ${invoiceLink}`);
     window.open(`https://wa.me/${completedBill.customer_phone ? '91'+completedBill.customer_phone : ''}?text=${message}`, "_blank");
   };
 
@@ -349,7 +369,6 @@ export default function Billing() {
     return () => { if (scannerRef.current) scannerRef.current.stop(); };
   }, []);
 
-  // Global Keyboard Listener for USB Scanners
   useEffect(() => {
     let barcodeBuffer = "";
     let lastKeyTime = 0;
@@ -376,10 +395,6 @@ export default function Billing() {
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
   }, [addToCartByCode]);
 
-
-  // =======================================================================
-  // RENDER UI: Vercel/Linear Inspired Architecture (Austere, Clean, Geometric)
-  // =======================================================================
   return (
     <AppLayout>
       
@@ -392,7 +407,7 @@ export default function Billing() {
           <div className="space-y-4 py-4">
             <div className="space-y-1.5">
               <Label className="text-xs text-zinc-500 font-medium uppercase tracking-wider">Item Name</Label>
-              <Input className="h-9 rounded-md border-zinc-200 focus-visible:ring-zinc-900" placeholder="e.g. Alteration Charge" value={customItemData.name} onChange={e => setCustomItemData({...customItemData, name: e.target.value})} />
+              <Input className="h-9 rounded-md border-zinc-200 focus-visible:ring-zinc-900" placeholder="e.g. Alteration Charge / Custom Murti" value={customItemData.name} onChange={e => setCustomItemData({...customItemData, name: e.target.value})} />
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
@@ -406,7 +421,7 @@ export default function Billing() {
             </div>
             <div className="space-y-1.5">
               <Label className="text-xs text-zinc-500 font-medium uppercase tracking-wider">Internal Notes (Optional)</Label>
-              <Input className="h-9 rounded-md border-zinc-200 focus-visible:ring-zinc-900" placeholder="e.g. Sleeves altered" value={customItemData.notes} onChange={e => setCustomItemData({...customItemData, notes: e.target.value})} />
+              <Input className="h-9 rounded-md border-zinc-200 focus-visible:ring-zinc-900" placeholder="e.g. Custom decoration requested" value={customItemData.notes} onChange={e => setCustomItemData({...customItemData, notes: e.target.value})} />
             </div>
           </div>
           <DialogFooter>
@@ -421,15 +436,22 @@ export default function Billing() {
         <DialogContent className="w-[90%] max-w-sm rounded-md p-6">
           <div className="flex flex-col items-center justify-center space-y-4 pt-4">
             <CheckCircle2 className="h-12 w-12 text-zinc-900" />
-            <DialogTitle className="text-xl font-semibold text-zinc-900">Order Confirmed</DialogTitle>
-            <div className="text-4xl font-semibold text-zinc-900 tracking-tight">
-              ₹{completedBill ? Math.abs(completedBill.final_amount).toFixed(0) : "0"}
+            <DialogTitle className="text-xl font-semibold text-zinc-900">Booking / Order Confirmed</DialogTitle>
+            <div className="text-center">
+              <div className="text-4xl font-semibold text-zinc-900 tracking-tight">
+                ₹{completedBill ? Math.abs(completedBill.final_amount).toFixed(0) : "0"}
+              </div>
+              {completedBill?.balance_due > 0 && (
+                <div className="mt-1 text-xs font-semibold text-orange-600 bg-orange-50 px-2.5 py-1 rounded-full inline-block">
+                  Balance Due: ₹{completedBill.balance_due}
+                </div>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-3 w-full mt-4">
-              <Button variant="outline" className="h-10 rounded-md font-medium text-zinc-700" onClick={printBill}><Printer className="h-4 w-4 mr-2"/> Print</Button>
-              <Button variant="outline" className="h-10 rounded-md font-medium text-zinc-700" onClick={shareOnWhatsApp}><MessageCircle className="h-4 w-4 mr-2"/> Share</Button>
+              <Button variant="outline" className="h-10 rounded-md font-medium text-zinc-700" onClick={printBill}><Printer className="h-4 w-4 mr-2"/> Print Receipt</Button>
+              <Button variant="outline" className="h-10 rounded-md font-medium text-zinc-700" onClick={shareOnWhatsApp}><MessageCircle className="h-4 w-4 mr-2"/> WhatsApp</Button>
             </div>
-            <Button className="w-full h-10 rounded-md font-medium bg-zinc-900 text-white hover:bg-zinc-800 mt-2" onClick={() => setShowSuccessModal(false)}>New Sale</Button>
+            <Button className="w-full h-10 rounded-md font-medium bg-zinc-900 text-white hover:bg-zinc-800 mt-2" onClick={() => setShowSuccessModal(false)}>New Sale / Booking</Button>
           </div>
         </DialogContent>
       </Dialog>
@@ -438,24 +460,22 @@ export default function Billing() {
       {viewMode === 'payment' && (
         <div className="lg:hidden fixed inset-0 z-40 flex flex-col bg-zinc-50 animate-in slide-in-from-right-2 duration-200">
            
-           {/* Header */}
            <div className="bg-white border-b border-zinc-200 p-4 flex items-center justify-between shrink-0 pt-safe shadow-sm">
              <div className="flex items-center gap-3">
                <Button variant="ghost" size="icon" className="h-8 w-8 rounded-md" onClick={() => setViewMode('scan')}><ArrowLeft className="h-5 w-5 text-zinc-700" /></Button>
-               <h2 className="font-semibold text-lg text-zinc-900 tracking-tight">Checkout</h2>
+               <h2 className="font-semibold text-lg text-zinc-900 tracking-tight">Checkout & Payment</h2>
              </div>
              <Button variant="ghost" size="sm" onClick={clearCart} className="text-red-500 hover:text-red-600 hover:bg-red-50 h-8 px-3 rounded-md text-xs font-medium">Clear Cart</Button>
            </div>
            
            <div className="flex-1 overflow-y-auto p-4 space-y-6">
               
-              {/* Customer Details section */}
               <div className="space-y-3">
-                <Label className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">Customer Details</Label>
+                <Label className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">Customer Details (Required for Advance Bookings)</Label>
                 <div className="flex flex-col gap-2">
                   <div className="flex items-center px-3 h-11 bg-white border border-zinc-200 rounded-md focus-within:border-zinc-900 transition-colors shadow-sm">
                       <Phone className="h-4 w-4 text-zinc-400 mr-2 shrink-0"/>
-                      <input placeholder="Mobile No. (Search)" value={customerPhone} onChange={e => handlePhoneChange(e.target.value)} className="bg-transparent border-0 text-sm font-medium focus:outline-none w-full placeholder:text-zinc-400"/>
+                      <input placeholder="Mobile No. (Search / Autofill)" value={customerPhone} onChange={e => handlePhoneChange(e.target.value)} className="bg-transparent border-0 text-sm font-medium focus:outline-none w-full placeholder:text-zinc-400"/>
                   </div>
                   <div className="flex items-center px-3 h-11 bg-white border border-zinc-200 rounded-md focus-within:border-zinc-900 transition-colors shadow-sm">
                       <User className="h-4 w-4 text-zinc-400 mr-2 shrink-0"/>
@@ -464,7 +484,6 @@ export default function Billing() {
                 </div>
               </div>
 
-              {/* Mobile Cart Items */}
               <div className="space-y-3">
                  <Label className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">Order Summary ({cart.length})</Label>
                  <div className="bg-white border border-zinc-200 rounded-md overflow-hidden shadow-sm">
@@ -486,7 +505,6 @@ export default function Billing() {
                    ))}
                    <div className="p-2 border-t border-zinc-100 bg-zinc-50/50">
                      <Button variant="outline" className="w-full h-9 border-dashed border-zinc-300 text-zinc-600 bg-white" onClick={() => {
-                        // Drop the checkout overlay and open the modal so Z-index doesn't conflict
                         setViewMode('scan'); 
                         setShowCustomItemModal(true);
                      }}>
@@ -496,39 +514,39 @@ export default function Billing() {
                  </div>
               </div>
 
-              {/* Payment Methods */}
+              {/* REFACTORED MOBILE PAYMENT MODE UI */}
               <div className="space-y-3">
-                <Label className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">Payment Method</Label>
+                <Label className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">Payment Mode & Allocation</Label>
                 <Tabs defaultValue="full" onValueChange={(val: any) => setPaymentTab(val)} className="w-full">
                   <TabsList className="w-full grid grid-cols-2 bg-zinc-100 rounded-md p-1 h-auto">
-                    <TabsTrigger value="full" className="rounded-[4px] py-1.5 text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-zinc-900 data-[state=active]:shadow-sm">Full Payment</TabsTrigger>
-                    <TabsTrigger value="advance" className="rounded-[4px] py-1.5 text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-zinc-900 data-[state=active]:shadow-sm">Advance / Udhaar</TabsTrigger>
+                    <TabsTrigger value="full" className="rounded-[4px] py-2 text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-zinc-900 data-[state=active]:shadow-sm">Full Payment</TabsTrigger>
+                    <TabsTrigger value="advance" className="rounded-[4px] py-2 text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-zinc-900 data-[state=active]:shadow-sm">Part Payment / Advance</TabsTrigger>
                   </TabsList>
 
                   <div className="mt-3">
                     <TabsContent value="full" className="m-0 space-y-3">
                       <div className="grid grid-cols-3 gap-2">
-                        <button className={`h-10 rounded-md text-xs font-medium transition-all border ${paymentMethod === 'cash' ? 'bg-zinc-900 border-zinc-900 text-white shadow-sm' : 'bg-white border-zinc-200 text-zinc-600'}`} onClick={() => setPaymentMethod('cash')}>Cash</button>
-                        <button className={`h-10 rounded-md text-xs font-medium transition-all border ${paymentMethod === 'online' ? 'bg-zinc-900 border-zinc-900 text-white shadow-sm' : 'bg-white border-zinc-200 text-zinc-600'}`} onClick={() => setPaymentMethod('online')}>Online</button>
-                        <button className={`h-10 rounded-md text-xs font-medium transition-all border ${paymentMethod === 'udhaar' ? 'bg-zinc-900 border-zinc-900 text-white shadow-sm' : 'bg-white border-zinc-200 text-zinc-600'}`} onClick={() => setPaymentMethod('udhaar')}>Udhaar</button>
+                        <button className={`h-11 rounded-md text-xs font-medium transition-all border ${paymentMethod === 'cash' ? 'bg-zinc-900 border-zinc-900 text-white shadow-sm' : 'bg-white border-zinc-200 text-zinc-600'}`} onClick={() => setPaymentMethod('cash')}>Cash</button>
+                        <button className={`h-11 rounded-md text-xs font-medium transition-all border ${paymentMethod === 'online' ? 'bg-zinc-900 border-zinc-900 text-white shadow-sm' : 'bg-white border-zinc-200 text-zinc-600'}`} onClick={() => setPaymentMethod('online')}>Online / UPI</button>
+                        <button className={`h-11 rounded-md text-xs font-medium transition-all border ${paymentMethod === 'unpaid' ? 'bg-zinc-900 border-zinc-900 text-white shadow-sm' : 'bg-white border-zinc-200 text-zinc-600'}`} onClick={() => setPaymentMethod('unpaid')}>Unpaid (Zero Adv.)</button>
                       </div>
                     </TabsContent>
 
                     <TabsContent value="advance" className="m-0 space-y-3">
-                      <div className="p-3 bg-white border border-zinc-200 rounded-md space-y-2 shadow-sm">
-                        <Label className="text-[11px] font-medium text-zinc-500">Advance Collected Today</Label>
+                      <div className="p-4 bg-white border border-zinc-200 rounded-md space-y-3 shadow-sm">
+                        <Label className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider">Advance Amount Paid Today</Label>
                         <div className="flex items-center gap-2">
-                          <span className="text-lg font-medium text-zinc-400">₹</span>
-                          <Input type="number" className="h-10 font-medium bg-zinc-50 border-zinc-200 rounded-md focus-visible:ring-zinc-900" placeholder="0.00" value={advanceAmount} onChange={e => setAdvanceAmount(e.target.value)} />
+                          <span className="text-xl font-bold text-zinc-400">₹</span>
+                          <Input type="number" className="h-11 font-bold text-lg bg-zinc-50 border-zinc-200 rounded-md focus-visible:ring-zinc-900" placeholder="0.00" value={advanceAmount} onChange={e => setAdvanceAmount(e.target.value)} />
                         </div>
-                        <div className="text-xs font-medium text-zinc-600 flex justify-between pt-2 border-t border-zinc-100 mt-2">
-                          <span>Pending Udhaar:</span>
-                          <span className="font-semibold text-zinc-900">₹{Math.max(0, finalTotal - parseFloat(advanceAmount || '0')).toFixed(2)}</span>
+                        <div className="text-xs font-medium text-zinc-600 flex justify-between pt-2 border-t border-zinc-100">
+                          <span>Balance Due Later:</span>
+                          <span className="font-bold text-base text-orange-600">₹{Math.max(0, finalTotal - parseFloat(advanceAmount || '0')).toFixed(2)}</span>
                         </div>
                       </div>
                       <div className="grid grid-cols-2 gap-2">
-                        <button className={`h-10 rounded-md text-xs font-medium transition-all border ${paymentMethod === 'cash' ? 'bg-zinc-900 border-zinc-900 text-white shadow-sm' : 'bg-white border-zinc-200 text-zinc-600'}`} onClick={() => setPaymentMethod('cash')}>Cash</button>
-                        <button className={`h-10 rounded-md text-xs font-medium transition-all border ${paymentMethod === 'online' ? 'bg-zinc-900 border-zinc-900 text-white shadow-sm' : 'bg-white border-zinc-200 text-zinc-600'}`} onClick={() => setPaymentMethod('online')}>Online</button>
+                        <button className={`h-11 rounded-md text-xs font-medium transition-all border ${paymentMethod === 'cash' ? 'bg-zinc-900 border-zinc-900 text-white shadow-sm' : 'bg-white border-zinc-200 text-zinc-600'}`} onClick={() => setPaymentMethod('cash')}>Cash Advance</button>
+                        <button className={`h-11 rounded-md text-xs font-medium transition-all border ${paymentMethod === 'online' ? 'bg-zinc-900 border-zinc-900 text-white shadow-sm' : 'bg-white border-zinc-200 text-zinc-600'}`} onClick={() => setPaymentMethod('online')}>Online Advance</button>
                       </div>
                     </TabsContent>
                   </div>
@@ -538,7 +556,7 @@ export default function Billing() {
            
            <div className="p-4 bg-white border-t border-zinc-200 shrink-0 pb-safe">
              <Button size="lg" className="w-full h-12 text-base font-semibold rounded-md bg-zinc-900 hover:bg-zinc-800 text-white" onClick={completeSale} disabled={isProcessing}>
-                Confirm & Pay ₹{finalTotal.toFixed(0)}
+               {paymentTab === 'advance' ? `Confirm Booking & Record Advance` : `Confirm & Pay ₹${finalTotal.toFixed(0)}`}
              </Button>
            </div>
         </div>
@@ -570,13 +588,12 @@ export default function Billing() {
         {/* CENTER: ITEMS GRID */}
         <div className="flex-1 flex flex-col min-w-0 bg-white relative">
           
-          {/* Responsive Header resolving Mobile Space Issues */}
           <div className="bg-white p-3 lg:p-4 border-b border-zinc-200 z-10 shrink-0 flex flex-col md:flex-row gap-3">
              <div className="flex gap-2 w-full md:flex-1">
                <div className="relative flex-1">
                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
                  <Input 
-                   placeholder="Search..." 
+                   placeholder="Search items or scan barcode..." 
                    className="pl-9 h-10 text-sm font-medium bg-zinc-50 border-zinc-200 focus-visible:ring-zinc-900 rounded-md w-full"
                    value={searchTerm} onChange={e => setSearchTerm(e.target.value)} ref={searchInputRef}
                    onKeyDown={(e) => e.key === "Enter" && searchTerm && (addToCartByCode(searchTerm))}
@@ -585,7 +602,7 @@ export default function Billing() {
                
                <Button variant="outline" className="h-10 w-10 md:w-auto rounded-md border-zinc-200 text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 shrink-0 p-0 md:px-3" onClick={() => setShowCustomItemModal(true)}>
                  <Edit3 className="h-4 w-4 md:mr-2" />
-                 <span className="hidden md:inline font-medium text-sm">Custom</span>
+                 <span className="hidden md:inline font-medium text-sm">Custom Line Item</span>
                </Button>
              </div>
              
@@ -681,18 +698,16 @@ export default function Billing() {
                     ))
                 )}
                 
-                {/* ALWAYS VISIBLE DESKTOP BUTTON */}
                 <div className="pt-4 mt-auto">
                    <Button variant="outline" className="w-full h-9 border-dashed border-zinc-300 text-zinc-600 bg-white hover:bg-zinc-50" onClick={() => setShowCustomItemModal(true)}>
-                     <Plus className="h-4 w-4 mr-2" /> Add Custom Item
+                     <Plus className="h-4 w-4 mr-2" /> Add Custom Line Item
                    </Button>
                 </div>
             </div>
 
-            {/* CHECKOUT TABS */}
+            {/* REFACTORED DESKTOP CHECKOUT TABS */}
             <div className="border-t border-zinc-200 bg-white p-5 z-10 space-y-4">
                 
-                {/* Phone First Input */}
                 <div className="flex items-center gap-3">
                   <div className="flex items-center px-3 h-10 bg-white border border-zinc-200 rounded-md flex-1 focus-within:border-zinc-900 transition-colors">
                       <Phone className="h-4 w-4 text-zinc-400 mr-2 shrink-0"/>
@@ -707,33 +722,33 @@ export default function Billing() {
                 <Tabs defaultValue="full" onValueChange={(val: any) => setPaymentTab(val)} className="w-full">
                   <TabsList className="w-full grid grid-cols-2 bg-zinc-100 rounded-md p-1 h-auto">
                     <TabsTrigger value="full" className="rounded-[4px] py-1.5 text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-zinc-900 data-[state=active]:shadow-sm">Full Payment</TabsTrigger>
-                    <TabsTrigger value="advance" className="rounded-[4px] py-1.5 text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-zinc-900 data-[state=active]:shadow-sm">Advance / Udhaar</TabsTrigger>
+                    <TabsTrigger value="advance" className="rounded-[4px] py-1.5 text-xs font-medium data-[state=active]:bg-white data-[state=active]:text-zinc-900 data-[state=active]:shadow-sm">Part Payment / Advance</TabsTrigger>
                   </TabsList>
 
                   <div className="mt-4">
                     <TabsContent value="full" className="m-0 space-y-3">
                       <div className="grid grid-cols-3 gap-2">
                         <button className={`h-9 rounded-md text-xs font-medium transition-all border ${paymentMethod === 'cash' ? 'bg-zinc-900 border-zinc-900 text-white' : 'bg-white border-zinc-200 text-zinc-600 hover:border-zinc-300'}`} onClick={() => setPaymentMethod('cash')}>Cash</button>
-                        <button className={`h-9 rounded-md text-xs font-medium transition-all border ${paymentMethod === 'online' ? 'bg-zinc-900 border-zinc-900 text-white' : 'bg-white border-zinc-200 text-zinc-600 hover:border-zinc-300'}`} onClick={() => setPaymentMethod('online')}>Online</button>
-                        <button className={`h-9 rounded-md text-xs font-medium transition-all border ${paymentMethod === 'udhaar' ? 'bg-zinc-900 border-zinc-900 text-white' : 'bg-white border-zinc-200 text-zinc-600 hover:border-zinc-300'}`} onClick={() => setPaymentMethod('udhaar')}>Udhaar</button>
+                        <button className={`h-9 rounded-md text-xs font-medium transition-all border ${paymentMethod === 'online' ? 'bg-zinc-900 border-zinc-900 text-white' : 'bg-white border-zinc-200 text-zinc-600 hover:border-zinc-300'}`} onClick={() => setPaymentMethod('online')}>Online / UPI</button>
+                        <button className={`h-9 rounded-md text-xs font-medium transition-all border ${paymentMethod === 'unpaid' ? 'bg-zinc-900 border-zinc-900 text-white' : 'bg-white border-zinc-200 text-zinc-600 hover:border-zinc-300'}`} onClick={() => setPaymentMethod('unpaid')}>Unpaid (Zero Adv.)</button>
                       </div>
                     </TabsContent>
 
                     <TabsContent value="advance" className="m-0 space-y-3">
                       <div className="p-3 bg-zinc-50 border border-zinc-200 rounded-md space-y-2">
-                        <Label className="text-[11px] font-medium text-zinc-500 uppercase tracking-wider">Advance Collected Today</Label>
+                        <Label className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider">Advance Amount Paid Today</Label>
                         <div className="flex items-center gap-2">
-                          <span className="text-lg font-medium text-zinc-400">₹</span>
-                          <Input type="number" className="h-9 font-medium bg-white border-zinc-200 rounded-md focus-visible:ring-zinc-900" placeholder="0.00" value={advanceAmount} onChange={e => setAdvanceAmount(e.target.value)} />
+                          <span className="text-lg font-bold text-zinc-400">₹</span>
+                          <Input type="number" className="h-9 font-bold bg-white border-zinc-200 rounded-md focus-visible:ring-zinc-900" placeholder="0.00" value={advanceAmount} onChange={e => setAdvanceAmount(e.target.value)} />
                         </div>
                         <div className="text-xs font-medium text-zinc-600 flex justify-between pt-1 border-t border-zinc-200 mt-2">
-                          <span>Pending Udhaar:</span>
-                          <span className="font-semibold text-zinc-900">₹{Math.max(0, finalTotal - parseFloat(advanceAmount || '0')).toFixed(2)}</span>
+                          <span>Balance Due Later:</span>
+                          <span className="font-bold text-orange-600">₹{Math.max(0, finalTotal - parseFloat(advanceAmount || '0')).toFixed(2)}</span>
                         </div>
                       </div>
                       <div className="grid grid-cols-2 gap-2">
-                        <button className={`h-9 rounded-md text-xs font-medium transition-all border ${paymentMethod === 'cash' ? 'bg-zinc-900 border-zinc-900 text-white' : 'bg-white border-zinc-200 text-zinc-600 hover:border-zinc-300'}`} onClick={() => setPaymentMethod('cash')}>Cash</button>
-                        <button className={`h-9 rounded-md text-xs font-medium transition-all border ${paymentMethod === 'online' ? 'bg-zinc-900 border-zinc-900 text-white' : 'bg-white border-zinc-200 text-zinc-600 hover:border-zinc-300'}`} onClick={() => setPaymentMethod('online')}>Online</button>
+                        <button className={`h-9 rounded-md text-xs font-medium transition-all border ${paymentMethod === 'cash' ? 'bg-zinc-900 border-zinc-900 text-white' : 'bg-white border-zinc-200 text-zinc-600 hover:border-zinc-300'}`} onClick={() => setPaymentMethod('cash')}>Cash Advance</button>
+                        <button className={`h-9 rounded-md text-xs font-medium transition-all border ${paymentMethod === 'online' ? 'bg-zinc-900 border-zinc-900 text-white' : 'bg-white border-zinc-200 text-zinc-600 hover:border-zinc-300'}`} onClick={() => setPaymentMethod('online')}>Online Advance</button>
                       </div>
                     </TabsContent>
                   </div>
@@ -741,11 +756,11 @@ export default function Billing() {
 
                 <div>
                    <div className="flex justify-between items-end mb-3">
-                       <span className="text-sm font-medium text-zinc-500">Total</span>
-                       <span className="font-semibold text-2xl text-zinc-900 leading-none tracking-tight">₹{subtotal.toFixed(0)}</span>
+                       <span className="text-sm font-medium text-zinc-500">Total Bill Amount</span>
+                       <span className="font-bold text-2xl text-zinc-900 leading-none tracking-tight">₹{subtotal.toFixed(0)}</span>
                    </div>
-                   <Button className="w-full h-12 font-medium text-base rounded-md bg-zinc-900 hover:bg-zinc-800 text-white transition-all" onClick={completeSale} disabled={isProcessing || cart.length === 0}>
-                       {paymentTab === 'advance' ? 'Confirm & Record Udhaar' : 'Checkout'}
+                   <Button className="w-full h-12 font-semibold text-base rounded-md bg-zinc-900 hover:bg-zinc-800 text-white transition-all" onClick={completeSale} disabled={isProcessing || cart.length === 0}>
+                       {paymentTab === 'advance' ? 'Confirm Booking & Record Advance' : 'Checkout & Generate Invoice'}
                    </Button>
                 </div>
             </div>
@@ -760,7 +775,7 @@ export default function Billing() {
                 <span className="text-lg font-semibold leading-none">₹{subtotal.toFixed(0)}</span>
               </div>
               <div className="flex items-center gap-1.5 text-sm font-medium">
-                View Cart <ArrowLeft className="h-4 w-4 rotate-180" />
+                View Cart & Pay <ArrowLeft className="h-4 w-4 rotate-180" />
               </div>
             </Button>
           </div>
