@@ -27,10 +27,10 @@ if (!id) return;
 
 try {
   const { data: billData, error: billError } = await supabase
-    .from("bills")
-    .select("*, tenants(tenant_name, tenant_logo)")
-    .eq("share_id", id)
-    .single();
+  .from("bills")
+  .select("*, tenants(tenant_name, tenant_logo, tenant_address, tenant_contact_name, tenant_phone)")
+  .eq("share_id", id)
+  .single();
 
   if (billError) throw billError;
 
@@ -88,6 +88,9 @@ const isPaid = bill.payment_status === "paid";
 const isPartiallyPaid = safeNumber(bill.balance_due) > 0;
 const businessName = bill.tenants?.tenant_name || "Retail Partner";
 const tenantLogo = bill.tenants?.tenant_logo || "";
+const tenantAddress = bill.tenants?.tenant_address || "";
+const tenantContactName = bill.tenants?.tenant_contact_name || "";
+const tenantPhone = bill.tenants?.tenant_phone ? String(bill.tenants.tenant_phone) : "";
 
 const handlePrint = () => {
 window.print();
@@ -146,9 +149,29 @@ return (
           <h1 className="text-2xl font-black text-slate-900 tracking-tight leading-none mb-2">
             {businessName}
           </h1>
+          
           <p className="text-sm text-slate-500 font-medium flex items-center justify-center gap-1.5">
             <MapPin className="h-3.5 w-3.5" /> E-Receipt
           </p>
+          {(tenantContactName || tenantAddress || tenantPhone) && (
+  <div className="mt-3 text-center space-y-1">
+    {tenantContactName && (
+      <p className="text-xs font-semibold text-slate-700">
+        {tenantContactName}
+      </p>
+    )}
+    {tenantAddress && (
+      <p className="text-xs text-slate-500 leading-snug">
+        {tenantAddress}
+      </p>
+    )}
+    {tenantPhone && (
+      <p className="text-xs text-slate-500">
+        Phone: {tenantPhone}
+      </p>
+    )}
+  </div>
+)}
         </div>
 
         <CardContent className="p-7 space-y-6">
@@ -236,70 +259,52 @@ return (
             })}
           </div>
 
-          <div className="pt-4 border-t-2 border-dashed border-slate-200 space-y-3">
-            <div className="flex justify-between text-sm font-bold text-slate-500">
-              <span>Subtotal</span>
-              <span>₹{Math.abs(safeNumber(bill.total_amount)).toFixed(2)}</span>
-            </div>
+          <div className="pt-4 border-t border-dashed border-slate-300 space-y-2 text-sm text-slate-800">
+  <div className="flex justify-between">
+    <span>Subtotal</span>
+    <span className="font-medium">
+      ₹{Math.abs(safeNumber(bill.total_amount)).toFixed(2)}
+    </span>
+  </div>
 
-            {safeNumber(bill.discount_amount) > 0 && (
-              <div className="flex justify-between text-sm font-bold text-green-600">
-                <span>Discount</span>
-                <span>- ₹{safeNumber(bill.discount_amount).toFixed(2)}</span>
-              </div>
-            )}
+  {safeNumber(bill.discount_amount) > 0 && (
+    <div className="flex justify-between">
+      <span>Discount</span>
+      <span className="font-medium">
+        - ₹{safeNumber(bill.discount_amount).toFixed(2)}
+      </span>
+    </div>
+  )}
 
-            {isPartiallyPaid ? (
-              <div className="pt-3 mt-3 border-t border-slate-100 space-y-3">
-                <div className="flex justify-between items-center">
-                  <span className="text-sm font-bold text-slate-900">
-                    Total Bill Amount
-                  </span>
-                  <span className="text-lg font-black text-slate-900">
-                    ₹{Math.abs(safeNumber(bill.final_amount)).toFixed(2)}
-                  </span>
-                </div>
+  <div className="flex justify-between pt-2 border-t border-dashed border-slate-200">
+    <span className="font-semibold">Total Bill Amount</span>
+    <span className="font-semibold">
+      ₹{Math.abs(safeNumber(bill.final_amount)).toFixed(2)}
+    </span>
+  </div>
 
-                <div className="flex justify-between items-center text-green-600 bg-green-50 p-2 rounded-lg">
-                  <div className="flex flex-col">
-                    <span className="text-sm font-bold">Advance Paid</span>
-                    <span className="text-[10px] uppercase font-bold tracking-wider">
-                      Via {bill.payment_method}
-                    </span>
-                  </div>
-                  <span className="text-lg font-black">
-                    ₹{safeNumber(bill.advance_paid).toFixed(2)}
-                  </span>
-                </div>
-
-                <div className="flex justify-between items-center text-orange-600 bg-orange-50 p-3 rounded-xl border border-orange-100">
-                  <span className="text-sm font-black uppercase tracking-wider">
-                    Balance Due
-                  </span>
-                  <span className="text-2xl font-black">
-                    ₹{safeNumber(bill.balance_due).toFixed(2)}
-                  </span>
-                </div>
-              </div>
-            ) : (
-              <div className="flex justify-between items-end pt-3 mt-3 border-t border-slate-100">
-                <div>
-                  <span className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1">
-                    Total Paid
-                  </span>
-                  <Badge
-                    variant="secondary"
-                    className="text-[10px] uppercase font-bold text-slate-500 bg-slate-100"
-                  >
-                    Via {bill.payment_method}
-                  </Badge>
-                </div>
-                <span className="text-4xl font-black text-slate-900 tracking-tighter">
-                  ₹{Math.abs(safeNumber(bill.final_amount)).toFixed(2)}
-                </span>
-              </div>
-            )}
-          </div>
+  {isPartiallyPaid ? (
+    <>
+      <div className="flex justify-between">
+        <span>Advance Paid</span>
+        <span>₹{safeNumber(bill.advance_paid).toFixed(2)}</span>
+      </div>
+      <div className="flex justify-between font-semibold pt-1">
+        <span>Balance Due</span>
+        <span>₹{safeNumber(bill.balance_due).toFixed(2)}</span>
+      </div>
+      <div className="flex justify-between text-xs text-slate-500 pt-1">
+        <span>Payment Method</span>
+        <span className="uppercase">{bill.payment_method}</span>
+      </div>
+    </>
+  ) : (
+    <div className="flex justify-between text-xs text-slate-500 pt-1">
+      <span>Payment Method</span>
+      <span className="uppercase">{bill.payment_method}</span>
+    </div>
+  )}
+</div>
         </CardContent>
 
         <div className="bg-slate-900 p-5 text-center">
