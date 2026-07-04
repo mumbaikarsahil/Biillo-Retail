@@ -104,7 +104,6 @@ export default function Billing() {
         .maybeSingle();
 
       if (data && data.invoice_number) {
-        // Look for trailing numbers (e.g., INV-1004 -> prefix: INV-, num: 1004)
         const match = data.invoice_number.match(/^(.*?)(\d+)$/);
         if (match) {
           const prefix = match[1];
@@ -112,11 +111,9 @@ export default function Billing() {
           const paddedNum = String(num).padStart(match[2].length, '0');
           setInvoiceNumber(`${prefix}${paddedNum}`);
         } else {
-          // If no trailing number, just append -1
           setInvoiceNumber(`${data.invoice_number}-1`);
         }
       } else {
-        // Default Starting Sequence
         setInvoiceNumber(`INV-1001`);
       }
     } catch (err) {
@@ -768,6 +765,26 @@ export default function Billing() {
                 </div>
             </div>
         </div>
+
+        {/* MOBILE FLOATING CART (RESTORED) */}
+        {cart.length > 0 && viewMode === 'scan' && (
+          <div className="lg:hidden fixed bottom-[80px] left-4 right-4 z-50 animate-in slide-in-from-bottom-2 fade-in duration-200">
+            <Button 
+              className="w-full h-14 rounded-2xl bg-zinc-900 hover:bg-zinc-800 text-white shadow-[0_8px_30px_rgb(0,0,0,0.12)] flex items-center justify-between px-5 transition-all active:scale-95" 
+              onClick={() => setViewMode('payment')}
+            >
+              <div className="flex flex-col items-start">
+                <span className="text-[10px] font-medium text-zinc-400 uppercase tracking-wider">
+                  {cart.reduce((a, b) => a + b.cartQuantity, 0)} Items
+                </span>
+                <span className="text-lg font-bold leading-none">₹{finalTotal.toFixed(0)}</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm font-semibold">
+                Proceed to Pay <ArrowLeft className="h-4 w-4 rotate-180" />
+              </div>
+            </Button>
+          </div>
+        )}
 
       </div>
     </AppLayout>
