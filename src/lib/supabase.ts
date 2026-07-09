@@ -25,7 +25,8 @@ export type Item = {
   quantity: number;          
   pieces_per_box: number;    
   size: string;     
-  image_url?: string | null;         
+  image_url?: string | null;        
+  show_on_web: boolean; 
 };
 
 export type Bill = {
@@ -51,6 +52,7 @@ export type BillItem = {
   item_id: string;
   quantity: number;
   price_at_sale: number;
+  
 };
 
 export type CartItem = Item & {
