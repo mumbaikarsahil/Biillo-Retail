@@ -24,7 +24,7 @@ import Sales from "./pages/sales/Sales";
 import Settings from "./pages/settings/Settings";
 import InvoiceView from "./pages/invoiceview/InvoiceView";
 import SuperAdmin from "./pages/admin/SuperAdmin";
-import CRM from "./pages/crm/CRM";
+import CRM from "./pages/crm/crm";
 
 const queryClient = new QueryClient();
 
