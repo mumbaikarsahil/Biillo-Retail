@@ -355,7 +355,7 @@ export default function Billing() {
     if (!completedBill) return;
     const PUBLIC_DOMAIN = "https://retail.biillo.com"; 
     const invoiceLink = `${PUBLIC_DOMAIN}/#/invoice/${completedBill.share_id}`;
-    const message = encodeURIComponent(`Thank you for shopping!\nInvoice: ${completedBill.invoice_number || completedBill.id}\nTotal Amount: ₹${Math.abs(completedBill.final_amount)}\nView E-Receipt: ${invoiceLink}`);
+    const message = encodeURIComponent(`Thank you for shopping at !\nInvoice: ${completedBill.invoice_number || completedBill.id}\nTotal Amount: ₹${Math.abs(completedBill.final_amount)}\nView E-Receipt: ${invoiceLink}`);
     window.open(`https://wa.me/${completedBill.customer_phone ? '91'+completedBill.customer_phone : ''}?text=${message}`, "_blank");
   };
 

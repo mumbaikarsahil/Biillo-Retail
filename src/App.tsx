@@ -7,6 +7,7 @@ import { HashRouter, Routes, Route, useLocation, useNavigate } from "react-route
 import { App as CapacitorApp } from "@capacitor/app";
 import { StatusBar, Style } from "@capacitor/status-bar";
 
+
 // Import the Bouncer
 import { ProtectedRoute } from "@/components/auth/ProtectedRoute";
 
@@ -23,6 +24,7 @@ import Sales from "./pages/sales/Sales";
 import Settings from "./pages/settings/Settings";
 import InvoiceView from "./pages/invoiceview/InvoiceView";
 import SuperAdmin from "./pages/admin/SuperAdmin";
+import CRM from "./pages/crm/CRM";
 
 const queryClient = new QueryClient();
 
@@ -46,7 +48,7 @@ const AppRoutes = () => {
       const backListener = await CapacitorApp.addListener('backButton', ({ canGoBack }) => {
         const currentPath = location.pathname;
 
-        if (currentPath === "/" || currentPath === "/dashboard") {
+        if (currentPath === "/" || currentPath === "/dashboard" || currentPath === "/billing") {
           const now = Date.now();
           if (now - lastBackPressTime.current < 2000) {
             CapacitorApp.exitApp();
@@ -58,7 +60,7 @@ const AppRoutes = () => {
             });
           }
         } else {
-          navigate("/dashboard");
+          navigate(-1); 
         }
       });
 
@@ -90,6 +92,11 @@ const AppRoutes = () => {
           <Billing />
         </ProtectedRoute>
       } />
+      <Route path="/settings" element={
+        <ProtectedRoute allowedRoles={['admin', 'manager', 'sales']}>
+          <Settings />
+        </ProtectedRoute>
+      } />
 
       {/* RESTRICTED ROUTES (Admins and Managers Only) */}
       <Route path="/inventory/add" element={
@@ -117,11 +124,12 @@ const AppRoutes = () => {
           <Sales />
         </ProtectedRoute>
       } />
-      <Route path="/settings" element={
-        <ProtectedRoute allowedRoles={['admin', 'manager']}>
-          <Settings />
-        </ProtectedRoute>
-      } />
+
+<Route path="/crm" element={
+  <ProtectedRoute allowedRoles={['admin', 'manager']}>
+    <CRM />
+  </ProtectedRoute>
+} />
 
       {/* Catch-all */}
       <Route path="*" element={<NotFound />} />

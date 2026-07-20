@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { 
   Package, 
@@ -10,13 +10,15 @@ import {
   FileText,
   ChevronLeft,
   ChevronRight,
-  ArrowLeft
+  ArrowLeft,
+  Users
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { supabase } from "@/lib/supabase";
 import { MobileNav } from "./MobileNav"; 
 
 const navItems = [
-  { href: "/", label: "Dashboard", icon: BarChart3 },
+  { href: "/dashboard", label: "Dashboard", icon: BarChart3 },
   { href: "/inventory/add", label: "Add Stock", icon: Plus },
   { href: "/billing", label: "Billing", icon: ShoppingCart },
   { href: "/analytics", label: "Analytics", icon: Package },
@@ -24,14 +26,44 @@ const navItems = [
   { href: "/udhaar", label: "Udhaar", icon: BookUser }, 
   { href: "/sales", label: "Sales", icon: FileText },   
   { href: "/settings", label: "Settings", icon: Settings }, 
+  { href: "/crm", label: "CRM", icon: Users }, // <-- Added CRM here!
 ];
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const navigate = useNavigate();
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [userRole, setUserRole] = useState<string | null>(null);
 
-  // Check if the user is on the root dashboard to hide the back button
+  // 1. Fetch user role from Supabase on mount
+  useEffect(() => {
+    const getUserRole = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user) {
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("role")
+          .eq("id", session.user.id)
+          .single();
+
+        if (profile?.role) {
+          setUserRole(profile.role.toLowerCase());
+        }
+      }
+    };
+    getUserRole();
+  }, []);
+
+  // 2. Filter navigation links: Sales role gets Dashboard, Billing, and Settings
+  const filteredNavItems = navItems.filter((item) => {
+    if (userRole === "sales") {
+      return item.href === "/" || item.href === "/dashboard" || item.href === "/billing" || item.href === "/settings";
+    }
+    // Admins and Managers see everything
+    return true;
+  });
+
+  // 3. Check if on root page (Dashboard is root for everyone now)
   const isRootPage = location.pathname === "/" || location.pathname === "/dashboard";
 
   return (
@@ -59,10 +91,10 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             )}
           </div>
 
-          {/* Navigation Links */}
+          {/* Navigation Links (Using filteredNavItems) */}
           <nav className="flex flex-1 flex-col">
             <ul className="flex flex-1 flex-col gap-y-1.5">
-              {navItems.map((item) => {
+              {filteredNavItems.map((item) => {
                 const isActive = location.pathname === item.href;
                 return (
                   <li key={item.href}>
@@ -142,7 +174,8 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
       </main>
 
       {/* --- MOBILE BOTTOM NAV --- */}
-      <MobileNav />
+      {/* Pass userRole down to MobileNav so it can hide unauthorized tabs */}
+      <MobileNav userRole={userRole} />
 
     </div>
   );

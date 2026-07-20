@@ -14,7 +14,8 @@ import {
   TrendingUp,
   AlertCircle,
   ShieldAlert,
-  Lightbulb
+  Lightbulb,
+  Users
 } from "lucide-react";
 
 // IMPORTANT: Match this exactly with the email you used in SuperAdmin.tsx
@@ -97,6 +98,13 @@ const Index = () => {
       allowedRoles: ["admin", "manager"]
     },
     { 
+      href: "/crm", 
+      label: "CRM", 
+      icon: Users, 
+      description: "App config",
+      allowedRoles: ["admin", "manager"]
+    },
+    { 
       href: "/analytics", 
       label: "Analytics", 
       icon: BarChart3, 
@@ -108,7 +116,7 @@ const Index = () => {
       label: "Settings", 
       icon: Settings, 
       description: "App config",
-      allowedRoles: ["admin", "manager"]
+      allowedRoles: ["admin", "manager", "sales"]
     },
   ];
 

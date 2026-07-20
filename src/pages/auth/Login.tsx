@@ -39,29 +39,63 @@ export default function RetailLogin() {
   
   const isApp = Capacitor.isNativePlatform();
 
+  // --- CHECK EXISTING SESSION & ROUTE BY ROLE ---
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) {
-        navigate("/dashboard", { replace: true });
+    const checkExistingSession = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user) {
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("role")
+          .eq("id", session.user.id)
+          .single();
+
+        // Route Sales directly to billing, everyone else to dashboard
+        if (profile?.role?.toLowerCase() === 'sales') {
+          navigate("/dashboard", { replace: true });
+        } else {
+          navigate("/", { replace: true });
+        }
       }
-    });
+    };
+    checkExistingSession();
   }, [navigate]);
 
-  // --- 1. HANDLE LOGIN ---
+  // --- 1. HANDLE LOGIN & ROUTE BY ROLE ---
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
 
     try {
-      const { error } = await supabase.auth.signInWithPassword({
+      // 1. Authenticate user
+      const { data: authData, error } = await supabase.auth.signInWithPassword({
         email,
         password,
       });
 
       if (error) throw error;
 
+      // 2. Default destination for Admins & Managers
+      let destination = "/dashboard"; 
+
+      // 3. Check role in database
+      if (authData.user) {
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("role")
+          .eq("id", authData.user.id)
+          .single();
+
+        // If sales, change destination to billing
+        if (profile?.role?.toLowerCase() === 'sales') {
+          destination = "/dashboard";
+        }
+      }
+
       toast({ title: "Welcome back!", className: "bg-indigo-600 text-white border-none" });
-      navigate("/dashboard"); 
+      
+      // 4. Navigate directly to the allowed page
+      navigate(destination, { replace: true }); 
 
     } catch (error: any) {
       toast({ 
